@@ -1,0 +1,4 @@
+# SwiftPM build output and the generated app bundle (./build.sh recreates it)
+.build/
+AerialSwap.app/
+.DS_Store

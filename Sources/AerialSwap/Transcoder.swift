@@ -8,7 +8,8 @@ struct TranscodeOptions: Sendable {
     var fps: Int = 60
     var trimStart: Double = 0
     var trimEnd: Double? = nil        // nil = until the end of the source
-    var freezeSeconds: Double = 0     // hold the last frame for this long
+    var freezeSeconds: Double = 0     // hold the last frame for this long (CLI only)
+    var loopCrossfade: Double = 0     // seconds; crossfade the end into the start for a seamless loop
 }
 
 /// Basic facts about a source video, shown in the UI.
@@ -105,59 +106,72 @@ final class Transcoder: @unchecked Sendable {
         let end = min(options.trimEnd ?? sourceEnd, sourceEnd)
         guard end - start >= 0.1 else { throw TranscodeError.invalidTrim }
 
+        // Seamless loop: the output starts `fade` seconds into the clip, and its last `fade` seconds are
+        // crossfaded into the clip's first `fade` seconds, so the last frame flows into the first one.
+        let fade = (options.loopCrossfade > 0 && options.freezeSeconds == 0 && end - start >= 3 * options.loopCrossfade)
+            ? options.loopCrossfade : 0
         let fps = options.fps
-        let clipFrames = Int(((end - start) * Double(fps)).rounded())
+        let clipFrames = Int(((end - start - fade) * Double(fps)).rounded())
+        let fadeFrames = Int((fade * Double(fps)).rounded())
         let freezeFrames = Int((max(0, options.freezeSeconds) * Double(fps)).rounded())
         let totalFrames = max(1, clipFrames + freezeFrames)
-        Log.info("Transcode \(source.lastPathComponent): \(start)-\(end)s @\(fps)fps, freeze \(options.freezeSeconds)s")
+        Log.info("Transcode \(source.lastPathComponent): \(start)-\(end)s @\(fps)fps, loop crossfade \(fade)s, freeze \(options.freezeSeconds)s")
 
         // Frame source. SDR and PQ (HDR10): a video composition does rotation, aspect-fill crop and color
         // conversion; its PQ->SDR mapping is correct (203 nits -> ~90% white). HLG (e.g. iPhone HDR):
         // AVFoundation's conversion comes out ~1.5 stops too dark, so raw frames are rendered with
-        // Core Image and our own tone curve instead (see HLGRenderer).
+        // Core Image and our own tone curve instead (see HDRToneMap).
         let fill = Self.fillTransform(naturalSize: naturalSize, preferred: transform)
-        let frameSettings: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
-            kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
-        ]
-        let output: AVAssetReaderOutput
-        let render: (CVPixelBuffer) throws -> CVPixelBuffer
-        if try await Self.isHLG(track) {
-            Log.info("HLG source: rendering with Core Image tone mapping")
-            let renderer = try HLGRenderer(transform: Self.coreImageTransform(fill, sourceHeight: naturalSize.height))
-            output = AVAssetReaderTrackOutput(track: track, outputSettings: frameSettings)
-            render = renderer.render
-        } else {
-            let composition = AVMutableVideoComposition()
-            composition.renderSize = CGSize(width: Self.width, height: Self.height)
-            composition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
-            composition.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
-            composition.colorTransferFunction = AVVideoTransferFunction_IEC_sRGB   // Apple aerials are tagged sRGB
-            composition.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
-            let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
-            layer.setTransform(fill, at: .zero)
-            let instruction = AVMutableVideoCompositionInstruction()
-            instruction.timeRange = trackRange
-            instruction.layerInstructions = [layer]
-            composition.instructions = [instruction]
-            let compositionOutput = AVAssetReaderVideoCompositionOutput(videoTracks: [track], videoSettings: frameSettings)
-            compositionOutput.videoComposition = composition
-            output = compositionOutput
-            render = { $0 }
-        }
-        output.alwaysCopiesSampleData = false
+        let hlg = try await Self.isHLG(track)
+        if hlg { Log.info("HLG source: rendering with Core Image tone mapping") }
+        let renderer = try CIFrameRenderer()
+        let ciFill = Self.coreImageTransform(fill, sourceHeight: naturalSize.height)
+        let toneMap = HDRToneMap()
 
-        let reader = try AVAssetReader(asset: asset)
-        reader.timeRange = CMTimeRange(start: CMTime(seconds: start, preferredTimescale: 600),
-                                       end: CMTime(seconds: end, preferredTimescale: 600))
-        reader.add(output)
+        /// Opens a reader for [from, to) that serves output-grid frames relative to `from`.
+        func makeSource(from: Double, to: Double) throws -> GridSource {
+            let frameSettings: [String: Any] = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
+            ]
+            let output: AVAssetReaderOutput
+            let render: (CVPixelBuffer) throws -> CVPixelBuffer
+            if hlg {
+                output = AVAssetReaderTrackOutput(track: track, outputSettings: frameSettings)
+                render = { frame in
+                    let image = CIImage(cvPixelBuffer: frame).transformed(by: ciFill).cropped(to: renderer.canvas)
+                    return try renderer.render(toneMap.apply(to: image))
+                }
+            } else {
+                let composition = AVMutableVideoComposition()
+                composition.renderSize = CGSize(width: Self.width, height: Self.height)
+                composition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(fps))
+                composition.colorPrimaries = AVVideoColorPrimaries_ITU_R_709_2
+                composition.colorTransferFunction = AVVideoTransferFunction_IEC_sRGB   // Apple aerials are tagged sRGB
+                composition.colorYCbCrMatrix = AVVideoYCbCrMatrix_ITU_R_709_2
+                let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: track)
+                layer.setTransform(fill, at: .zero)
+                let instruction = AVMutableVideoCompositionInstruction()
+                instruction.timeRange = trackRange
+                instruction.layerInstructions = [layer]
+                composition.instructions = [instruction]
+                let compositionOutput = AVAssetReaderVideoCompositionOutput(videoTracks: [track], videoSettings: frameSettings)
+                compositionOutput.videoComposition = composition
+                output = compositionOutput
+                render = { $0 }
+            }
+            output.alwaysCopiesSampleData = false
+            let reader = try AVAssetReader(asset: asset)
+            reader.timeRange = CMTimeRange(start: CMTime(seconds: from, preferredTimescale: 600),
+                                           end: CMTime(seconds: to, preferredTimescale: 600))
+            reader.add(output)
+            return try GridSource(reader: reader, output: output, render: render, offset: from)
+        }
 
         try? FileManager.default.removeItem(at: destination)
         let sink = try WriterSink(url: destination)
         let encoder = try Self.makeEncoder(fps: fps, sink: sink)
         defer { VTCompressionSessionInvalidate(encoder) }
-
-        guard reader.startReading() else { throw TranscodeError.reader(reader.error?.localizedDescription ?? "unknown error") }
 
         var frameIndex = 0
         func encode(_ pixelBuffer: CVPixelBuffer) throws {
@@ -172,40 +186,32 @@ final class Transcoder: @unchecked Sendable {
             progress(Double(frameIndex) / Double(totalFrames))
         }
 
-        // Source frames are rendered lazily: only when they are actually used, and only once when repeated.
-        var lastSource: CVPixelBuffer?
-        var lastRendered: CVPixelBuffer?
-        func emitLast() throws {
-            guard let lastSource else { return }
-            if lastRendered == nil { lastRendered = try render(lastSource) }
-            try encode(lastRendered!)
-        }
-
+        let main = try makeSource(from: start + fade, to: end)
+        var head: GridSource?   // the clip's first `fade` seconds, opened when the crossfade begins
         do {
-            // Neither source duplicates frames, so map source frames onto the output grid:
-            // output frame k (time k/fps) shows the latest source frame with pts <= k/fps.
-            // This duplicates frames for up-conversion (30 -> 60) and drops them for down-conversion.
-            while let sample = output.copyNextSampleBuffer() {
-                guard let pixelBuffer = CMSampleBufferGetImageBuffer(sample) else { continue }
-                let time = CMSampleBufferGetPresentationTimeStamp(sample).seconds - start
-                if lastSource != nil {
-                    while frameIndex < clipFrames, Double(frameIndex) / Double(fps) < time - 1e-6 {
-                        try emitLast()
+            var last: CVPixelBuffer?
+            for k in 0..<clipFrames {
+                guard var frame = try main.frame(at: Double(k) / Double(fps)) else { break }
+                let j = k - (clipFrames - fadeFrames)
+                if fadeFrames > 0, j >= 0 {
+                    if head == nil { head = try makeSource(from: start, to: start + fade) }
+                    if let headFrame = try head?.frame(at: Double(j) / Double(fps)) {
+                        let x = Double(j + 1) / Double(fadeFrames)
+                        frame = try renderer.dissolve(from: frame, to: headFrame, amount: x * x * (3 - 2 * x))   // smoothstep
                     }
                 }
-                lastSource = pixelBuffer
-                lastRendered = nil
+                try encode(frame)
+                last = frame
             }
-            if reader.status == .failed { throw TranscodeError.reader(reader.error?.localizedDescription ?? "unknown error") }
-            if lastSource != nil {
-                while frameIndex < clipFrames { try emitLast() }   // rest of the clip
-                for _ in 0..<freezeFrames { try emitLast() }        // optional hold
+            if let last {
+                for _ in 0..<freezeFrames { try encode(last) }   // optional hold (CLI)
             }
             let status = VTCompressionSessionCompleteFrames(encoder, untilPresentationTimeStamp: .invalid)
             guard status == noErr else { throw TranscodeError.encode(status) }
             try await sink.finish()
         } catch {
-            reader.cancelReading()
+            main.cancel()
+            head?.cancel()
             sink.cancel()
             try? FileManager.default.removeItem(at: destination)
             throw error
@@ -315,21 +321,18 @@ private struct HDRToneMap: Sendable {
     }
 }
 
-/// Renders HLG frames with Core Image: rotation + aspect-fill crop, the HDR tone curve, and conversion
-/// to the output's BT.709 / sRGB colors, into 10-bit 4:2:0 buffers for the encoder.
-private final class HLGRenderer {
+/// Renders Core Image frames into 10-bit 4:2:0 buffers tagged like the output (BT.709 / sRGB).
+/// Used for HLG tone mapping and for the loop crossfade.
+private final class CIFrameRenderer {
+    let canvas = CGRect(x: 0, y: 0, width: Transcoder.width, height: Transcoder.height)
     private let context = CIContext(options: [
         .workingColorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!,
         .cacheIntermediates: false,
     ])
     private let outputColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!   // BT.709 primaries, sRGB transfer
-    private let canvas = CGRect(x: 0, y: 0, width: Transcoder.width, height: Transcoder.height)
-    private let transform: CGAffineTransform
-    private let toneMap = HDRToneMap()
     private let pool: CVPixelBufferPool
 
-    init(transform: CGAffineTransform) throws {
-        self.transform = transform
+    init() throws {
         let attributes: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange,
             kCVPixelBufferWidthKey as String: Transcoder.width,
@@ -343,7 +346,7 @@ private final class HLGRenderer {
         self.pool = pool
     }
 
-    func render(_ source: CVPixelBuffer) throws -> CVPixelBuffer {
+    func render(_ image: CIImage) throws -> CVPixelBuffer {
         var buffer: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer) == kCVReturnSuccess, let buffer else {
             throw TranscodeError.reader("could not allocate a frame buffer")
@@ -352,10 +355,68 @@ private final class HLGRenderer {
         CVBufferSetAttachment(buffer, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
         CVBufferSetAttachment(buffer, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_sRGB, .shouldPropagate)
         CVBufferSetAttachment(buffer, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
-        // CIImage reads the frame's HLG / BT.2020 attachments and decodes to linear light (reference white = 1.0).
-        let image = CIImage(cvPixelBuffer: source).transformed(by: transform).cropped(to: canvas)
-        context.render(toneMap.apply(to: image), to: buffer, bounds: canvas, colorSpace: outputColorSpace)
+        context.render(image, to: buffer, bounds: canvas, colorSpace: outputColorSpace)
         return buffer
+    }
+
+    /// Mixes two finished output frames; amount 0 = `from`, 1 = `to`.
+    func dissolve(from: CVPixelBuffer, to: CVPixelBuffer, amount: Double) throws -> CVPixelBuffer {
+        let filter = CIFilter.dissolveTransition()
+        filter.inputImage = CIImage(cvPixelBuffer: from)
+        filter.targetImage = CIImage(cvPixelBuffer: to)
+        filter.time = Float(amount)
+        return try render(filter.outputImage ?? CIImage(cvPixelBuffer: from))
+    }
+}
+
+/// Reads one time range and serves it on the output grid: `frame(at: t)` is the latest source frame
+/// with pts <= t (t relative to the range start). Neither AVFoundation output duplicates frames, so this
+/// repeats frames for up-conversion (30 -> 60) and skips them for down-conversion. Frames are rendered
+/// lazily and only once, even when repeated.
+private final class GridSource {
+    private let reader: AVAssetReader
+    private let output: AVAssetReaderOutput
+    private let render: (CVPixelBuffer) throws -> CVPixelBuffer
+    private let offset: Double
+    private var current: (time: Double, buffer: CVPixelBuffer)?
+    private var next: (time: Double, buffer: CVPixelBuffer)?
+    private var rendered: CVPixelBuffer?
+
+    init(reader: AVAssetReader, output: AVAssetReaderOutput, render: @escaping (CVPixelBuffer) throws -> CVPixelBuffer,
+         offset: Double) throws {
+        self.reader = reader
+        self.output = output
+        self.render = render
+        self.offset = offset
+        guard reader.startReading() else {
+            throw TranscodeError.reader(reader.error?.localizedDescription ?? "unknown error")
+        }
+        next = read()
+    }
+
+    func frame(at time: Double) throws -> CVPixelBuffer? {
+        // Advance while the following frame is due; the very first frame is used even if it starts late.
+        while let upcoming = next, current == nil || upcoming.time <= time + 1e-6 {
+            current = upcoming
+            rendered = nil
+            next = read()
+        }
+        if reader.status == .failed {
+            throw TranscodeError.reader(reader.error?.localizedDescription ?? "unknown error")
+        }
+        guard let current else { return nil }
+        if rendered == nil { rendered = try render(current.buffer) }
+        return rendered
+    }
+
+    func cancel() { reader.cancelReading() }
+
+    private func read() -> (time: Double, buffer: CVPixelBuffer)? {
+        while let sample = output.copyNextSampleBuffer() {
+            guard let buffer = CMSampleBufferGetImageBuffer(sample) else { continue }
+            return (CMSampleBufferGetPresentationTimeStamp(sample).seconds - offset, buffer)
+        }
+        return nil
     }
 }
 

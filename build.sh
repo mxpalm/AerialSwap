@@ -1,7 +1,16 @@
 #!/bin/zsh
 # Builds AerialSwap.app with SwiftPM (no Xcode needed) and ad-hoc signs it.
+#   ./build.sh            build ./AerialSwap.app
+#   ./build.sh --install  build and move it to /Applications (keeps a single copy)
 set -euo pipefail
 cd "$(dirname "$0")"
+
+INSTALL=false
+[[ "${1:-}" == "--install" ]] && INSTALL=true
+if $INSTALL && pgrep -x AerialSwap >/dev/null; then
+    echo "AerialSwap is running. Quit it (Cmd-Q) first so a running transcode isn't interrupted." >&2
+    exit 1
+fi
 
 swift build -c release
 BIN="$(swift build -c release --show-bin-path)/AerialSwap"
@@ -33,6 +42,16 @@ PLIST
 
 # Ad-hoc signature, no sandbox entitlements (needs access to ~/Library/Application Support/com.apple.wallpaper).
 codesign --force --sign - "$APP"
+
+if $INSTALL; then
+    # Move instead of copy: two bundles with the same identifier confuse LaunchServices.
+    rm -rf "/Applications/$APP"
+    mv "$APP" "/Applications/$APP"
+    touch "/Applications/$APP"   # refresh the Dock/Finder icon cache
+    echo "Installed /Applications/$APP"
+    exit 0
+fi
+
 echo "Built $(pwd)/$APP"
 if pgrep -x AerialSwap >/dev/null; then
     echo "Note: AerialSwap is still running the previous build. Quit it (Cmd-Q) and reopen to use this one."

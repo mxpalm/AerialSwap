@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 /// Headless helpers for testing without the UI. Never touches the aerials folder.
 ///   AerialSwap --list
-///   AerialSwap --transcode <in> <out.mov> [--fps auto|60|120|240] [--start s] [--end s] [--freeze s]
+///   AerialSwap --transcode <in> <out.mov> [--fps auto|60|120|240] [--start s] [--end s] [--loop s] [--freeze s]
 enum CLI {
     static func run(_ args: [String]) async -> Int32 {
         let store = AerialStore()
@@ -52,7 +52,7 @@ enum CLI {
         }
 
         guard args.count >= 3 else {
-            print("usage: AerialSwap --transcode <in> <out.mov> [--fps auto|60|120|240] [--start s] [--end s] [--freeze s]")
+            print("usage: AerialSwap --transcode <in> <out.mov> [--fps auto|60|120|240] [--start s] [--end s] [--loop s] [--freeze s]")
             return 2
         }
         var options = TranscodeOptions()
@@ -65,6 +65,7 @@ enum CLI {
             case "--start": options.trimStart = value ?? 0
             case "--end": options.trimEnd = value
             case "--freeze": options.freezeSeconds = value ?? 0
+            case "--loop": options.loopCrossfade = value ?? 0
             default: print("unknown option \(args[i])"); return 2
             }
             i += 2

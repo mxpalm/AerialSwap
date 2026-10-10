@@ -134,7 +134,7 @@ struct ContentView: View {
             preview
             details(info)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(height: 245, alignment: .top)
+                .frame(minHeight: 245, alignment: .top)
         }
     }
 
@@ -188,11 +188,20 @@ struct ContentView: View {
                 }
                 .controlSize(.small)
                 .padding(.top, 2)
+                Toggle("Smooth loop", isOn: $model.smoothLoop)
+                    .toggleStyle(.checkbox)
+                    .font(.callout)
+                    .disabled(!model.canSmoothLoop)
+                    .help("The lock screen loops your clip. This crossfades its last second into the first, "
+                          + "so the loop has no visible cut. Needs a clip of at least 3 seconds.")
+                    .padding(.top, 4)
             }
 
             VStack(alignment: .leading, spacing: 4) {
                 FieldLabel("Becomes")
-                Text(outputText(info)).font(.callout)
+                Text(outputText(info))
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)   // wrap instead of truncating
             }
 
             Spacer(minLength: 0)
@@ -221,7 +230,8 @@ struct ContentView: View {
     }
 
     private func outputText(_ info: SourceInfo) -> String {
-        let base = "4K HEVC · \(model.outputFPS) fps · no sound"
+        let loop = model.smoothLoop && model.canSmoothLoop ? " · seamless loop" : ""
+        let base = "4K HEVC · \(model.outputFPS) fps · no sound" + loop
         return info.hdr == nil ? base : base + " · converted to SDR"
     }
 

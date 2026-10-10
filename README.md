@@ -6,8 +6,14 @@ natively (lock screen + desktop) with no background process. Personal use, macOS
 ## Build
 
 ```sh
-./build.sh            # needs only the Command Line Tools (swift build + codesign --sign -)
-open AerialSwap.app
+./build.sh --install  # builds and moves AerialSwap.app to /Applications (quit the app first)
+./build.sh            # or just build ./AerialSwap.app in the project folder
+```
+
+Needs only the Command Line Tools (`swift build` + `codesign --sign -`).
+
+```sh
+open /Applications/AerialSwap.app
 ```
 
 ## Usage
@@ -23,6 +29,8 @@ open AerialSwap.app
    screen saver one.
 3. Optional: to use only part of the clip, click **Trim…** for QuickTime's trim bar on the preview,
    or type start/end seconds into **Trim**. The output frame rate is picked automatically (see below).
+   **Smooth loop** (on by default) crossfades the clip's last second into its first, so the lock screen
+   loop has no visible cut. The result is 1 s shorter; it needs a clip of at least 3 s.
 4. **Set as Wallpaper…** asks once, then transcodes (with a time estimate) and installs: Apple's original
    is backed up once, the file is swapped atomically, `WallpaperAgent` is restarted and temp files are deleted.
 5. Make sure the target Aerial is selected as your wallpaper in System Settings → Wallpaper.
@@ -35,7 +43,7 @@ Headless helpers (never touch the aerials folder):
 
 ```sh
 AerialSwap.app/Contents/MacOS/AerialSwap --list
-AerialSwap.app/Contents/MacOS/AerialSwap --transcode in.mp4 out.mov [--fps auto|60|120|240] [--start 0] [--end 30] [--freeze 60]
+AerialSwap.app/Contents/MacOS/AerialSwap --transcode in.mp4 out.mov [--fps auto|60|120|240] [--start 0] [--end 30] [--loop 1] [--freeze 60]
 ```
 
 ## How it works (findings from macOS 27.0.1)

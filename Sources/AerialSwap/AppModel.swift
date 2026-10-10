@@ -33,6 +33,7 @@ final class AppModel {
     // Options (output fps is chosen automatically from the source, see Transcoder.autoFPS)
     var trimStart = 0.0
     var trimEnd = 0.0
+    var smoothLoop = true             // crossfade the end into the start (see Transcoder)
 
     // Progress
     var isBusy = false
@@ -57,6 +58,8 @@ final class AppModel {
     var selectedAsset: AerialAsset? { assets.first { $0.id == selectedID } }
     var isTrimmed: Bool { sourceInfo.map { trimStart > 0.01 || trimEnd < $0.duration - 0.01 } ?? false }
     var outputFPS: Int { Transcoder.autoFPS(forSource: sourceInfo?.fps ?? 60) }
+    static let loopCrossfade = 1.0
+    var canSmoothLoop: Bool { trimEnd - trimStart >= 3 * Self.loopCrossfade }
     var canSetWallpaper: Bool { !isBusy && sourceInfo != nil && selectedAsset != nil }
 
     init() {
@@ -271,7 +274,8 @@ final class AppModel {
     func setAsWallpaper() {
         guard let source = sourceURL, let info = sourceInfo, let asset = selectedAsset else { return }
         let options = TranscodeOptions(fps: outputFPS, trimStart: trimStart,
-                                       trimEnd: trimEnd < info.duration ? trimEnd : nil)
+                                       trimEnd: trimEnd < info.duration ? trimEnd : nil,
+                                       loopCrossfade: canSmoothLoop && smoothLoop ? Self.loopCrossfade : 0)
         let destination = Self.workDir().appending(path: "\(UUID().uuidString).mov")
         let transcoder = Transcoder()
         self.transcoder = transcoder
@@ -395,6 +399,7 @@ final class AppModel {
             // The loaded source was that intermediate, so it is gone now.
             player = nil; sourceURL = nil; sourceInfo = nil; displayName = nil
         }
+        Self.removeWorkDir()   // nothing in it is needed any more
     }
 
     private func fail(_ error: Error) {

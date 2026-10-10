@@ -31,9 +31,18 @@ open /Applications/AerialSwap.app
    or type start/end seconds into **Trim**. The output frame rate is picked automatically (see below).
    **Smooth loop** (on by default) crossfades the clip's last second into its first, so the lock screen
    loop has no visible cut. The result is 1 s shorter; it needs a clip of at least 3 s.
+   **Motion** (shown when the video has fewer frames than it could use) generates real in-between frames
+   with VideoToolbox's optical-flow frame rate conversion, so the slow-down after unlocking doesn't stutter:
+   - *Smooth · 60 fps* (default for 24/30 fps videos): ~4x real time to prepare.
+   - *Maximum · 120 fps* (also offered for 60 fps videos): twice the frames again, ~10x real time.
+   - *Original*: frames as recorded (repeated to fill 60 fps).
 4. **Set as Wallpaper…** asks once, then transcodes (with a time estimate) and installs: Apple's original
    is backed up once, the file is swapped atomically, `WallpaperAgent` is restarted and temp files are deleted.
 5. Make sure the target Aerial is selected as your wallpaper in System Settings → Wallpaper.
+
+**Your wallpapers:** every wallpaper you set is kept in a library (shown when no new video is loaded).
+Click one and **Set as Wallpaper** to switch back to it in seconds, without the original file and
+without converting again. Right-click or hover to delete one; the wallpaper on screen is not affected.
 
 **Restore original** puts Apple's file back. Each row shows whether the asset is *Original*,
 *Replaced*, or *Was replaced, but macOS has since reset the file*. In the last case **Reinstall**
@@ -58,6 +67,9 @@ AerialSwap.app/Contents/MacOS/AerialSwap --transcode in.mp4 out.mov [--fps auto|
   AerialSwap encodes with VideoToolbox hierarchical HEVC (`BaseLayerFrameRate` = 15 fps).
 - Output format: HEVC Main 10, `hvc1`, 3840×2160, 10-bit 4:2:0, BT.709 primaries/matrix with sRGB
   transfer (same tags as Apple's files), aspect-fill center crop, no audio.
+- Encoding rate: 20 Mbps at 60 fps (14 / 26 / 32 Mbps at 30 / 120 / 240 fps), close to Apple's own
+  Aerials (~10–12 Mbps at 240 fps). Compared with 30 Mbps on a worst-case detail clip: 32% smaller,
+  42 dB PSNR / 0.99 SSIM between the two.
 - Output frame rate is automatic: 60 fps for normal video (24/30/60), 120 or 240 fps only when the
   source really has that many frames (e.g. iPhone slo-mo). Upsampling a 30 fps clip to 240 would only
   repeat frames: no smoother slow-down on unlock, but ~4x transcode time and a bigger file.
@@ -80,6 +92,7 @@ frame (e.g. 60–120 s): any unlock during the hold leaves that frame on the des
 | Path | Purpose |
 |---|---|
 | `~/Library/Application Support/AerialSwap/backups/<id>.mov.apple-original` | Apple's original (written once, never overwritten) |
+| `~/Library/Application Support/AerialSwap/library/` | Your saved wallpapers (`<id>.mov`, `<id>.jpg`, `library.json`) |
 | `~/Library/Application Support/AerialSwap/installed/<id>.mov` | Copy of your installed video, for **Reinstall** (deleted on restore) |
 | `~/Library/Application Support/AerialSwap/state.json` | What was installed where |
 | `~/Library/Logs/AerialSwap.log` | Log |
@@ -110,6 +123,7 @@ download it again.
   version again. The status line then shows *macOS has since reset the file*; just install again.
 - Apple may change the wallpaper internals (xattrs, temporal-layer requirement, file layout) in any
   update. Undocumented behaviour, use at your own risk.
-- Tested on the desktop so far: 60 fps (3 temporal layers). 120/240 fps output has 4 layers but is untested on the desktop.
+- Tested on the desktop: 60 fps (3 temporal layers) and 120 fps (4 layers). 240 fps output has the same
+  structure but is untested on the desktop.
 - ffmpeg conversion is an extra lossy step (HEVC at 80 Mbps, hardly visible) and drops audio.
   ffmpeg is only used when you agree to it and is never bundled.

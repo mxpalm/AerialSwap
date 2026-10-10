@@ -1,6 +1,19 @@
 import AppKit
 import AVKit
 
+/// How motion is prepared: as recorded, or with generated in-between frames (see FrameInterpolator).
+enum MotionMode: String, CaseIterable, Identifiable {
+    case original, smooth, maximum
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .original: "Original"
+        case .smooth: "Smooth · 60 fps"
+        case .maximum: "Maximum · 120 fps"
+        }
+    }
+}
+
 /// A message shown in the bottom bar.
 struct Notice: Equatable {
     enum Kind { case info, success, error }
@@ -13,6 +26,7 @@ struct Notice: Equatable {
 @MainActor @Observable
 final class AppModel {
     let store = AerialStore()
+    let library = WallpaperLibrary()
 
     // Source (sourceURL may be an ffmpeg-converted temp file; displayName is the user's original file name)
     var sourceURL: URL?
@@ -30,10 +44,19 @@ final class AppModel {
     var selectedID: String?
     var selectionNote = ""
 
+    // Library of finished wallpapers (shown while no new video is loaded)
+    var libraryItems: [LibraryItem] = []
+    var libraryThumbnails: [String: NSImage] = [:]
+    var selectedLibraryID: String?
+    var hoveredLibraryID: String?
+    var deleteCandidate: LibraryItem?
+    @ObservationIgnored private var didImportLegacy = false
+
     // Options (output fps is chosen automatically from the source, see Transcoder.autoFPS)
     var trimStart = 0.0
     var trimEnd = 0.0
     var smoothLoop = true             // crossfade the end into the start (see Transcoder)
+    var motionMode = MotionMode.smooth
 
     // Progress
     var isBusy = false
@@ -57,10 +80,28 @@ final class AppModel {
 
     var selectedAsset: AerialAsset? { assets.first { $0.id == selectedID } }
     var isTrimmed: Bool { sourceInfo.map { trimStart > 0.01 || trimEnd < $0.duration - 0.01 } ?? false }
-    var outputFPS: Int { Transcoder.autoFPS(forSource: sourceInfo?.fps ?? 60) }
+    /// 60 for normal video, the source rate for real 120/240 fps footage, 120 for Maximum smoothness.
+    var outputFPS: Int {
+        let auto = Transcoder.autoFPS(forSource: sourceInfo?.fps ?? 60)
+        return effectiveMotionMode == .maximum ? max(auto, 120) : auto
+    }
     static let loopCrossfade = 1.0
     var canSmoothLoop: Bool { trimEnd - trimStart >= 3 * Self.loopCrossfade }
-    var canSetWallpaper: Bool { !isBusy && sourceInfo != nil && selectedAsset != nil }
+    /// Motion choices that make sense for this source (same 0.85 rule as the Transcoder); empty = no choice.
+    var availableMotionModes: [MotionMode] {
+        guard let fps = sourceInfo?.fps, fps > 0, FrameInterpolator.isSupported else { return [] }
+        var modes: [MotionMode] = [.original]
+        if Double(fps) < 60 * 0.85 { modes.append(.smooth) }
+        if Double(fps) < 120 * 0.85 { modes.append(.maximum) }
+        return modes.count > 1 ? modes : []
+    }
+    var effectiveMotionMode: MotionMode { availableMotionModes.contains(motionMode) ? motionMode : .original }
+    var interpolates: Bool { effectiveMotionMode != .original }
+    var selectedLibraryItem: LibraryItem? { libraryItems.first { $0.id == selectedLibraryID } }
+    /// "Set as Wallpaper" installs the selected library item when no new video is loaded.
+    var isUsingLibrary: Bool { sourceURL == nil && selectedLibraryItem != nil }
+    var canSetWallpaper: Bool { !isBusy && selectedAsset != nil && (sourceInfo != nil || isUsingLibrary) }
+    var libraryBytes: Int64 { libraryItems.reduce(0) { $0 + $1.bytes } }
 
     init() {
         Self.removeWorkDir()   // leftovers from a crash or a force quit
@@ -80,7 +121,9 @@ final class AppModel {
         do {
             assets = try store.listAssets()
             statuses = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, store.status(of: $0)) })
+            refreshLibrary()
             for asset in assets { updateThumbnail(for: asset) }
+            importLegacyInstallsIfNeeded()
             if selectedID == nil || !assets.contains(where: { $0.id == selectedID }) {
                 let detected = store.detectSelection()
                 if let id = detected.desktop, assets.contains(where: { $0.id == id }) {
@@ -100,31 +143,91 @@ final class AppModel {
     private func updateThumbnail(for asset: AerialAsset) {
         var key = "apple"
         var video: URL?
+        var saved: URL?
         if case .replaced(_, let date, _) = statuses[asset.id] ?? .original {
             key = "installed-\(date.timeIntervalSince1970)"
+            if let id = store.libraryID(of: asset), let item = libraryItems.first(where: { $0.id == id }) {
+                saved = library.thumbnailURL(item)
+            }
             let copy = store.installedCopyURL(for: asset.id)
             video = FileManager.default.fileExists(atPath: copy.path) ? copy : asset.videoURL
         }
         guard thumbnailKeys[asset.id] != key else { return }
         thumbnailKeys[asset.id] = key
         let appleThumbnail = NSImage(contentsOf: asset.thumbnailURL)
+        if let saved, let image = NSImage(contentsOf: saved) { thumbnails[asset.id] = image; return }
         guard let video else { thumbnails[asset.id] = appleThumbnail; return }
         Task {
-            let frame = await Self.middleFrame(of: video)
+            let frame = await WallpaperLibrary.middleFrame(of: video)
             guard thumbnailKeys[asset.id] == key else { return }   // status changed meanwhile
             thumbnails[asset.id] = frame.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
                 ?? appleThumbnail
         }
     }
 
-    private nonisolated static func middleFrame(of url: URL) async -> CGImage? {
-        let asset = AVURLAsset(url: url)
-        guard let duration = try? await asset.load(.duration) else { return nil }
-        let generator = AVAssetImageGenerator(asset: asset)
-        generator.maximumSize = CGSize(width: 480, height: 270)
-        generator.appliesPreferredTrackTransform = true
-        let time = CMTime(seconds: duration.seconds / 2, preferredTimescale: 600)
-        return try? await generator.image(at: time).image
+    // MARK: - Library
+
+    func refreshLibrary() {
+        libraryItems = library.load()
+        for item in libraryItems where libraryThumbnails[item.id] == nil {
+            libraryThumbnails[item.id] = NSImage(contentsOf: library.thumbnailURL(item))
+        }
+        if let id = selectedLibraryID, !libraryItems.contains(where: { $0.id == id }) { selectedLibraryID = nil }
+    }
+
+    func selectLibraryItem(_ item: LibraryItem) {
+        guard !isBusy else { return }
+        selectedLibraryID = selectedLibraryID == item.id ? nil : item.id   // click again to deselect
+    }
+
+    /// Names of the Aerials currently playing this library item.
+    func playingAerials(for item: LibraryItem) -> [String] {
+        assets.filter { asset in
+            if case .replaced = statuses[asset.id] ?? .original { return store.libraryID(of: asset) == item.id }
+            return false
+        }.map(\.name)
+    }
+
+    func deleteLibraryItem(_ item: LibraryItem) {
+        do {
+            try library.remove(item)
+            libraryThumbnails[item.id] = nil
+            notice = Notice(kind: .info, text: "“\(item.name)” was removed from your library.")
+        } catch {
+            fail(error)
+        }
+        refreshLibrary()
+    }
+
+    func revealLibrary() {
+        let dir = library.directory
+        NSWorkspace.shared.activateFileViewerSelecting([FileManager.default.fileExists(atPath: dir.path) ? dir : store.supportDir])
+    }
+
+    /// Installs from before the library existed have a Reinstall copy; import it once so it shows up.
+    private func importLegacyInstallsIfNeeded() {
+        guard !didImportLegacy, !library.exists else { return }
+        didImportLegacy = true
+        let candidates = assets.compactMap { asset -> (AerialAsset, InstallRecord, URL)? in
+            let copy = store.installedCopyURL(for: asset.id)
+            guard let record = store.loadState()[asset.id], record.libraryID == nil,
+                  FileManager.default.fileExists(atPath: copy.path) else { return nil }
+            return (asset, record, copy)
+        }
+        Task {
+            for (asset, record, copy) in candidates {
+                do {
+                    let item = try await library.add(copy, name: record.sourceName)
+                    try store.setLibraryID(item.id, for: asset)
+                } catch {
+                    Log.error("Library import of \(record.sourceName) failed: \(error.localizedDescription)")
+                }
+            }
+            try? library.createIfMissing()
+            refreshLibrary()
+            thumbnailKeys.removeAll()          // let replaced cards pick up the saved thumbnails
+            for asset in assets { updateThumbnail(for: asset) }
+        }
     }
 
     func select(_ asset: AerialAsset) {
@@ -153,6 +256,8 @@ final class AppModel {
                 sourceInfo = info
                 trimStart = 0
                 trimEnd = info.duration
+                // Smooth by default when it's cheap enough to matter; 60 fps sources stay as recorded.
+                motionMode = availableMotionModes.contains(.smooth) ? .smooth : .original
                 let player = AVPlayer(url: url)
                 player.isMuted = true   // the wallpaper has no sound either
                 self.player = player
@@ -247,9 +352,14 @@ final class AppModel {
 
     // MARK: - Set as wallpaper
 
-    /// Rough duration estimate for the confirmation: ~1.15x real time at 60 fps, scaling with fps.
+    /// Rough duration estimate for the confirmation: ~1.15x real time at 60 fps, scaling with fps,
+    /// plus ~70 ms per generated 4K frame for Smooth motion (measured on Apple Silicon).
     var estimateText: String {
-        let seconds = max(1, trimEnd - trimStart) * Double(outputFPS) / 60 * 1.15
+        let length = max(1, trimEnd - trimStart)
+        var seconds = length * Double(outputFPS) / 60 * 1.15
+        if interpolates, let fps = sourceInfo?.fps {
+            seconds += length * max(0, Double(outputFPS) - Double(fps)) * 0.07
+        }
         return seconds < 90 ? "about \(Int(seconds.rounded())) seconds" : "about \(Int((seconds / 60).rounded())) minutes"
     }
 
@@ -270,12 +380,23 @@ final class AppModel {
         isBusy = false; showsProgress = false; phase = ""
     }
 
-    /// Transcodes the source, then installs it over the selected Aerial (the user confirmed beforehand).
+    /// Called after the user confirmed: installs the selected library item, or prepares the new video.
     func setAsWallpaper() {
+        if isUsingLibrary, let item = selectedLibraryItem, let asset = selectedAsset {
+            isBusy = true; notice = nil
+            install(library.videoURL(item), name: item.name, libraryID: item.id, over: asset)
+            return
+        }
+        transcodeAndInstall()
+    }
+
+    /// Transcodes the source, saves it to the library, then installs it over the selected Aerial.
+    private func transcodeAndInstall() {
         guard let source = sourceURL, let info = sourceInfo, let asset = selectedAsset else { return }
         let options = TranscodeOptions(fps: outputFPS, trimStart: trimStart,
                                        trimEnd: trimEnd < info.duration ? trimEnd : nil,
-                                       loopCrossfade: canSmoothLoop && smoothLoop ? Self.loopCrossfade : 0)
+                                       loopCrossfade: canSmoothLoop && smoothLoop ? Self.loopCrossfade : 0,
+                                       interpolate: interpolates)
         let destination = Self.workDir().appending(path: "\(UUID().uuidString).mov")
         let transcoder = Transcoder()
         self.transcoder = transcoder
@@ -291,7 +412,7 @@ final class AppModel {
                 }
                 await MainActor.run {
                     self.transcodedURL = destination
-                    self.install(destination, over: asset)
+                    self.saveAndInstall(destination, over: asset)
                 }
             } catch {
                 await MainActor.run {
@@ -309,14 +430,29 @@ final class AppModel {
         converter?.cancel()
     }
 
-    private func install(_ file: URL, over asset: AerialAsset) {
+    /// Keeps the finished video in the library (non-fatal if that fails), then installs it.
+    private func saveAndInstall(_ file: URL, over asset: AerialAsset) {
         let name = displayName ?? "your video"
+        showsProgress = false; phase = "Saving to your library"
+        Task {
+            do {
+                let item = try await library.add(file, name: name)
+                install(library.videoURL(item), name: name, libraryID: item.id, over: asset)
+            } catch {
+                Log.error("Could not save to library: \(error.localizedDescription)")
+                install(file, name: name, libraryID: nil, over: asset)
+            }
+        }
+    }
+
+    private func install(_ file: URL, name: String, libraryID: String?, over asset: AerialAsset) {
         showsProgress = false; phase = "Installing"
         Task {
             do {
-                try await store.install(file, sourceName: name, over: asset, protect: false)
+                try await store.install(file, sourceName: name, over: asset, protect: false, libraryID: libraryID)
                 removeTempFilesAfterInstall()
-                notice = Notice(kind: .success, text: "“\(asset.name)” now plays your video. Lock your Mac to see it.")
+                selectedLibraryID = nil
+                notice = Notice(kind: .success, text: "“\(asset.name)” now plays “\(name)”. Lock your Mac to see it.")
             } catch {
                 fail(error)
             }

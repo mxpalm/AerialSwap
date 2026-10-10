@@ -10,6 +10,7 @@ struct TranscodeOptions: Sendable {
     var trimEnd: Double? = nil        // nil = until the end of the source
     var freezeSeconds: Double = 0     // hold the last frame for this long (CLI only)
     var loopCrossfade: Double = 0     // seconds; crossfade the end into the start for a seamless loop
+    var interpolate = false           // generate in-between frames when the source has fewer frames than the output
 }
 
 /// Basic facts about a source video, shown in the UI.
@@ -29,6 +30,7 @@ enum TranscodeError: LocalizedError {
     case encode(OSStatus)
     case reader(String)
     case writer(String)
+    case interpolation(String)
     case cancelled
 
     var errorDescription: String? {
@@ -40,6 +42,7 @@ enum TranscodeError: LocalizedError {
         case .encode(let s): "HEVC encoding failed (OSStatus \(s))."
         case .reader(let m): "Could not read the source video: \(m)"
         case .writer(let m): "Could not write the output file: \(m)"
+        case .interpolation(let m): "Smooth motion failed: \(m)"
         case .cancelled: "Transcode cancelled."
         }
     }
@@ -121,6 +124,12 @@ final class Transcoder: @unchecked Sendable {
         // conversion; its PQ->SDR mapping is correct (203 nits -> ~90% white). HLG (e.g. iPhone HDR):
         // AVFoundation's conversion comes out ~1.5 stops too dark, so raw frames are rendered with
         // Core Image and our own tone curve instead (see HDRToneMap).
+        // Smooth motion: only worth it when the source really has fewer frames than the output.
+        let sourceFPS = Double(try await track.load(.nominalFrameRate))
+        let interpolator = options.interpolate && sourceFPS > 0 && sourceFPS < Double(fps) * 0.85 && FrameInterpolator.isSupported
+            ? try FrameInterpolator(width: Self.width, height: Self.height) : nil
+        if interpolator != nil { Log.info("Smooth motion: interpolating \(sourceFPS) fps -> \(fps) fps") }
+
         let fill = Self.fillTransform(naturalSize: naturalSize, preferred: transform)
         let hlg = try await Self.isHLG(track)
         if hlg { Log.info("HLG source: rendering with Core Image tone mapping") }
@@ -186,16 +195,24 @@ final class Transcoder: @unchecked Sendable {
             progress(Double(frameIndex) / Double(totalFrames))
         }
 
+        /// The output frame for time `t`: the latest source frame, or an interpolated in-between frame.
+        func outputFrame(_ source: GridSource, at t: Double) async throws -> CVPixelBuffer? {
+            guard let pair = try source.pair(at: t) else { return nil }
+            guard let interpolator, let next = pair.next, pair.phase > 0.02 else { return pair.current }
+            if pair.phase > 0.98 { return next }
+            return try await interpolator.interpolate(from: pair.current, to: next, phase: pair.phase)
+        }
+
         let main = try makeSource(from: start + fade, to: end)
         var head: GridSource?   // the clip's first `fade` seconds, opened when the crossfade begins
         do {
             var last: CVPixelBuffer?
             for k in 0..<clipFrames {
-                guard var frame = try main.frame(at: Double(k) / Double(fps)) else { break }
+                guard var frame = try await outputFrame(main, at: Double(k) / Double(fps)) else { break }
                 let j = k - (clipFrames - fadeFrames)
                 if fadeFrames > 0, j >= 0 {
                     if head == nil { head = try makeSource(from: start, to: start + fade) }
-                    if let headFrame = try head?.frame(at: Double(j) / Double(fps)) {
+                    if let head, let headFrame = try await outputFrame(head, at: Double(j) / Double(fps)) {
                         let x = Double(j + 1) / Double(fadeFrames)
                         frame = try renderer.dissolve(from: frame, to: headFrame, amount: x * x * (3 - 2 * x))   // smoothstep
                     }
@@ -264,8 +281,9 @@ final class Transcoder: @unchecked Sendable {
             compressionSessionOut: &session)
         guard status == noErr, let session else { throw TranscodeError.encoderSetup(status) }
 
-        // Bitrate grows with frame rate; values chosen to stay visually clean for 4K content.
-        let bitrate = [30: 20_000_000, 60: 30_000_000, 120: 40_000_000, 240: 50_000_000][fps] ?? 30_000_000
+        // Bitrate grows with frame rate, but less than linearly: neighbouring frames are nearly identical.
+        // 20 Mbps at 60 fps is clean for 4K and close to Apple's own Aerials (~10-12 Mbps at 240 fps).
+        let bitrate = [30: 14_000_000, 60: 20_000_000, 120: 26_000_000, 240: 32_000_000][fps] ?? 20_000_000
         let properties: [CFString: CFTypeRef] = [
             kVTCompressionPropertyKey_ProfileLevel: kVTProfileLevel_HEVC_Main10_AutoLevel,
             kVTCompressionPropertyKey_RealTime: kCFBooleanFalse,
@@ -369,8 +387,8 @@ private final class CIFrameRenderer {
     }
 }
 
-/// Reads one time range and serves it on the output grid: `frame(at: t)` is the latest source frame
-/// with pts <= t (t relative to the range start). Neither AVFoundation output duplicates frames, so this
+/// Reads one time range and serves it on the output grid: `pair(at: t)` gives the latest source frame
+/// with pts <= t (t relative to the range start) plus the next one, for interpolation. Neither AVFoundation output duplicates frames, so this
 /// repeats frames for up-conversion (30 -> 60) and skips them for down-conversion. Frames are rendered
 /// lazily and only once, even when repeated.
 private final class GridSource {
@@ -381,6 +399,7 @@ private final class GridSource {
     private var current: (time: Double, buffer: CVPixelBuffer)?
     private var next: (time: Double, buffer: CVPixelBuffer)?
     private var rendered: CVPixelBuffer?
+    private var renderedNext: CVPixelBuffer?
 
     init(reader: AVAssetReader, output: AVAssetReaderOutput, render: @escaping (CVPixelBuffer) throws -> CVPixelBuffer,
          offset: Double) throws {
@@ -394,11 +413,13 @@ private final class GridSource {
         next = read()
     }
 
-    func frame(at time: Double) throws -> CVPixelBuffer? {
+    /// The latest frame with pts <= time, the frame after it (if any) and how far `time` lies between them.
+    func pair(at time: Double) throws -> (current: CVPixelBuffer, next: CVPixelBuffer?, phase: Double)? {
         // Advance while the following frame is due; the very first frame is used even if it starts late.
         while let upcoming = next, current == nil || upcoming.time <= time + 1e-6 {
             current = upcoming
-            rendered = nil
+            rendered = renderedNext
+            renderedNext = nil
             next = read()
         }
         if reader.status == .failed {
@@ -406,7 +427,10 @@ private final class GridSource {
         }
         guard let current else { return nil }
         if rendered == nil { rendered = try render(current.buffer) }
-        return rendered
+        guard let upcoming = next, upcoming.time > current.time else { return (rendered!, nil, 0) }
+        if renderedNext == nil { renderedNext = try render(upcoming.buffer) }
+        let phase = (time - current.time) / (upcoming.time - current.time)
+        return (rendered!, renderedNext, min(max(phase, 0), 1))
     }
 
     func cancel() { reader.cancelReading() }

@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 /// Headless helpers for testing without the UI. Never touches the aerials folder.
 ///   AerialSwap --list
-///   AerialSwap --transcode <in> <out.mov> [--fps auto|60|120|240] [--start s] [--end s] [--loop s] [--freeze s]
+///   AerialSwap --transcode <in> <out.mov> [--fps auto|60|120|240] [--start s] [--end s] [--loop s] [--interpolate] [--freeze s]
 enum CLI {
     static func run(_ args: [String]) async -> Int32 {
         let store = AerialStore()
@@ -52,13 +52,15 @@ enum CLI {
         }
 
         guard args.count >= 3 else {
-            print("usage: AerialSwap --transcode <in> <out.mov> [--fps auto|60|120|240] [--start s] [--end s] [--loop s] [--freeze s]")
+            print("usage: AerialSwap --transcode <in> <out.mov> [--fps auto|60|120|240] [--start s] [--end s] [--loop s] [--interpolate] [--freeze s]")
             return 2
         }
         var options = TranscodeOptions()
         var fixedFPS: Int?   // nil = pick from the source like the app does
         var i = 3
-        while i + 1 < args.count {
+        while i < args.count {
+            if args[i] == "--interpolate" { options.interpolate = true; i += 1; continue }   // flag without value
+            guard i + 1 < args.count else { print("missing value for \(args[i])"); return 2 }
             let value = Double(args[i + 1])
             switch args[i] {
             case "--fps": fixedFPS = args[i + 1] == "auto" ? nil : Int(value ?? 60)

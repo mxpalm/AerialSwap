@@ -16,6 +16,7 @@ struct InstallRecord: Codable, Sendable {
     var installedSize: Int64
     var sourceName: String
     var protected: Bool
+    var libraryID: String? = nil   // the WallpaperLibrary item that was installed (nil for installs before the library)
 }
 
 enum AerialStatus: Sendable, Equatable {
@@ -144,6 +145,16 @@ struct AerialStore: Sendable {
         FileManager.default.fileExists(atPath: backupURL(for: asset.id).path)
     }
 
+    func libraryID(of asset: AerialAsset) -> String? { loadState()[asset.id]?.libraryID }
+
+    /// Links an existing install to a library item (used when importing installs from before the library).
+    func setLibraryID(_ id: String, for asset: AerialAsset) throws {
+        var state = loadState()
+        guard state[asset.id] != nil else { return }
+        state[asset.id]?.libraryID = id
+        try saveState(state)
+    }
+
     func canReinstall(_ asset: AerialAsset) -> Bool {
         loadState()[asset.id] != nil && FileManager.default.fileExists(atPath: installedCopyURL(for: asset.id).path)
     }
@@ -178,7 +189,8 @@ struct AerialStore: Sendable {
     }
 
     /// Installs a transcoded file as videos/<id>.mov atomically and restarts WallpaperAgent.
-    func install(_ transcoded: URL, sourceName: String, over asset: AerialAsset, protect: Bool) async throws {
+    func install(_ transcoded: URL, sourceName: String, over asset: AerialAsset, protect: Bool,
+                 libraryID: String? = nil) async throws {
         try await validate(transcoded)
         try ensureBackup(of: asset)
 
@@ -196,7 +208,7 @@ struct AerialStore: Sendable {
 
         var state = loadState()
         state[asset.id] = InstallRecord(installedAt: .now, installedSize: fileSize(asset.videoURL),
-                                        sourceName: sourceName, protected: protect)
+                                        sourceName: sourceName, protected: protect, libraryID: libraryID)
         try saveState(state)
         Log.info("Installed \(sourceName) over \(asset.id) (\(asset.name)), protected=\(protect)")
         keepInstalledCopy(of: transcoded, for: asset.id)
@@ -209,7 +221,8 @@ struct AerialStore: Sendable {
         guard let record = loadState()[asset.id], FileManager.default.fileExists(atPath: copy.path) else {
             throw StoreError.backupMissing(copy.path)
         }
-        try await install(copy, sourceName: record.sourceName, over: asset, protect: record.protected)
+        try await install(copy, sourceName: record.sourceName, over: asset, protect: record.protected,
+                          libraryID: record.libraryID)
     }
 
     /// Non-fatal: the install already succeeded; without the copy only "Reinstall" is unavailable.

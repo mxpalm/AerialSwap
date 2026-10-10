@@ -45,6 +45,12 @@ struct ContentView: View {
         } message: {
             Text("“\(model.restoreCandidate?.name ?? "")” will play Apple's video again.")
         }
+        .confirmationDialog("Delete from your library?", isPresented: deleteBinding) {
+            Button("Delete", role: .destructive) { if let item = model.deleteCandidate { model.deleteLibraryItem(item) } }
+        } message: {
+            Text("“\(model.deleteCandidate?.name ?? "")” will be removed from your library. "
+                 + "The wallpaper currently on your screen is not affected.")
+        }
         .alert("Convert this video?", isPresented: conversionBinding) {
             Button("Convert with ffmpeg") { model.convertPending() }
             Button("Cancel", role: .cancel) { model.pendingConversion = nil }
@@ -55,6 +61,10 @@ struct ContentView: View {
 
     private var confirmText: String {
         let target = model.selectedAsset?.name ?? ""
+        if model.isUsingLibrary, let item = model.selectedLibraryItem {
+            return "“\(target)” will play “\(item.name)” from your library. It's already prepared, "
+                + "so this only takes a few seconds."
+        }
         let video = model.displayName ?? ""
         return "“\(target)” will play “\(video)”.\n\nPreparing the video takes \(model.estimateText). "
             + "Apple's original is backed up first and can be restored at any time."
@@ -62,6 +72,10 @@ struct ContentView: View {
 
     private var restoreBinding: Binding<Bool> {
         Binding(get: { model.restoreCandidate != nil }, set: { if !$0 { model.restoreCandidate = nil } })
+    }
+
+    private var deleteBinding: Binding<Bool> {
+        Binding(get: { model.deleteCandidate != nil }, set: { if !$0 { model.deleteCandidate = nil } })
     }
 
     private var conversionBinding: Binding<Bool> {
@@ -101,7 +115,18 @@ struct ContentView: View {
         }
     }
 
-    private var emptySource: some View {
+    @ViewBuilder private var emptySource: some View {
+        if model.libraryItems.isEmpty {
+            dropZone
+        } else {
+            VStack(alignment: .leading, spacing: 18) {
+                compactDropZone
+                librarySection
+            }
+        }
+    }
+
+    private var dropZone: some View {
         VStack(spacing: 10) {
             Image(systemName: "film.stack")
                 .font(.system(size: 34, weight: .light))
@@ -121,11 +146,65 @@ struct ContentView: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 236)
-        .background {
-            RoundedRectangle(cornerRadius: 14)
-                .fill(.quaternary.opacity(0.5))
-            RoundedRectangle(cornerRadius: 14)
-                .strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
+        .background(dropZoneBackground)
+    }
+
+    private var compactDropZone: some View {
+        HStack(spacing: 14) {
+            Image(systemName: "film.stack")
+                .font(.system(size: 26, weight: .light))
+                .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.sourceURL == nil ? "Drop a new video here" : "Loading…").font(.headline)
+                Text("MP4 and MOV are used directly; other formats are converted with ffmpeg.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Choose Video…") { model.showImporter = true }
+                .keyboardShortcut("o")
+        }
+        .padding(.horizontal, 20)
+        .frame(height: 84)
+        .background(dropZoneBackground)
+    }
+
+    private var dropZoneBackground: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 14).fill(.quaternary.opacity(0.5))
+            RoundedRectangle(cornerRadius: 14).strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
+        }
+    }
+
+    private var librarySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                SectionTitle("Your wallpapers")
+                Spacer()
+                Text("\(model.libraryItems.count) saved · \(model.libraryBytes.formatted(.byteCount(style: .file)))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            ScrollView(.horizontal) {
+                HStack(spacing: 14) {
+                    ForEach(model.libraryItems) { item in
+                        LibraryCard(item: item,
+                                    image: model.libraryThumbnails[item.id],
+                                    details: "\(clock(item.duration)) · \(item.bytes.formatted(.byteCount(style: .file)))",
+                                    playingOn: model.playingAerials(for: item),
+                                    isSelected: model.selectedLibraryID == item.id,
+                                    isHovered: model.hoveredLibraryID == item.id,
+                                    onDelete: { model.deleteCandidate = item })
+                            .onTapGesture { model.selectLibraryItem(item) }
+                            .onHover { model.hoveredLibraryID = $0 ? item.id : nil }
+                            .contextMenu {
+                                Button("Delete from Library…", role: .destructive) { model.deleteCandidate = item }
+                            }
+                    }
+                }
+                .padding(4)
+            }
+            .scrollIndicators(.never)
         }
     }
 
@@ -195,6 +274,21 @@ struct ContentView: View {
                     .help("The lock screen loops your clip. This crossfades its last second into the first, "
                           + "so the loop has no visible cut. Needs a clip of at least 3 seconds.")
                     .padding(.top, 4)
+                if !model.availableMotionModes.isEmpty {
+                    // A compact drop-down: a segmented control with these labels is wider than the column.
+                    HStack(spacing: 6) {
+                        Text("Motion").font(.callout)
+                        Picker("Motion", selection: $model.motionMode) {
+                            ForEach(model.availableMotionModes) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                    .controlSize(.small)
+                    .help("Smooth and Maximum generate real in-between frames, so motion and the slow-down after "
+                          + "unlocking stay fluid. Maximum doubles the frames again (120 fps) and takes about twice as long.")
+                }
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -231,7 +325,9 @@ struct ContentView: View {
 
     private func outputText(_ info: SourceInfo) -> String {
         let loop = model.smoothLoop && model.canSmoothLoop ? " · seamless loop" : ""
-        let base = "4K HEVC · \(model.outputFPS) fps · no sound" + loop
+        let fps = model.interpolates
+            ? "\(model.outputFPS) fps, smoothed from \(Int(info.fps.rounded()))" : "\(model.outputFPS) fps"
+        let base = "4K HEVC · \(fps) · no sound" + loop
         return info.hdr == nil ? base : base + " · converted to SDR"
     }
 
@@ -373,6 +469,7 @@ struct ContentView: View {
 
     private var moreMenu: some View {
         Menu {
+            Button("Show Library in Finder") { model.revealLibrary() }
             Button("Show Backups in Finder") { model.revealBackups() }
             Button("Open Log") { model.openLog() }
         } label: {
@@ -386,8 +483,14 @@ struct ContentView: View {
     }
 
     private var hint: String {
-        if model.sourceInfo == nil { return "Add a video to get started." }
         guard let asset = model.selectedAsset else { return "Pick the wallpaper to replace." }
+        if model.isUsingLibrary, let item = model.selectedLibraryItem {
+            return "Ready: “\(item.name)” will replace “\(asset.name)”. No conversion needed."
+        }
+        if model.sourceInfo == nil {
+            return model.libraryItems.isEmpty ? "Add a video to get started."
+                : "Add a new video, or pick one of your saved wallpapers."
+        }
         return "Ready: your video will replace “\(asset.name)”."
     }
 
@@ -581,6 +684,72 @@ private struct AerialCard: View {
         case .original: "Apple original"
         case .replaced(let name, _, _): name
         case .resetByMacOS: "Apple's video is back"
+        }
+    }
+}
+
+private struct LibraryCard: View {
+    let item: LibraryItem
+    let image: NSImage?
+    let details: String
+    let playingOn: [String]
+    let isSelected: Bool
+    let isHovered: Bool
+    let onDelete: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ZStack(alignment: .topLeading) {
+                Group {
+                    if let image {
+                        Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        LinearGradient(colors: [.indigo.opacity(0.5), .teal.opacity(0.4)], startPoint: .top, endPoint: .bottom)
+                    }
+                }
+                .frame(width: 160, height: 90)
+                .clipped()
+                if !playingOn.isEmpty {
+                    Badge(text: "On \(playingOn.joined(separator: ", "))", color: .green).padding(6)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(isSelected ? Color.accentColor : .white.opacity(isHovered ? 0.35 : 0.1),
+                                  lineWidth: isSelected ? 3 : 1)
+            }
+            .overlay(alignment: .topTrailing) { cornerControl.padding(6) }
+            .shadow(color: .black.opacity(isSelected ? 0.3 : 0.15), radius: isSelected ? 7 : 3, y: 2)
+            .scaleEffect(isHovered && !isSelected ? 1.02 : 1)
+            .animation(.snappy(duration: 0.15), value: isHovered)
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(item.name).font(.caption.weight(.semibold)).lineLimit(1).truncationMode(.middle)
+                Text(details).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+            }
+            .padding(.horizontal, 2)
+        }
+        .frame(width: 160)
+        .contentShape(Rectangle())
+        .help(item.name)
+    }
+
+    @ViewBuilder private var cornerControl: some View {
+        if isSelected {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.title3)
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.white, Color.accentColor)
+        } else if isHovered {
+            Button(action: onDelete) {
+                Image(systemName: "trash.circle.fill")
+                    .font(.title3)
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.white, .black.opacity(0.55))
+            }
+            .buttonStyle(.plain)
+            .help("Delete from library")
         }
     }
 }

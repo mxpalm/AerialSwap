@@ -57,6 +57,7 @@ final class AppModel {
     var trimEnd = 0.0
     var smoothLoop = true             // crossfade the end into the start (see Transcoder)
     var motionMode = MotionMode.smooth
+    var enhanceDetail = false         // opt-in per video: ML upscaling for sources up to 1080p (see DetailEnhancer)
 
     // Progress
     var isBusy = false
@@ -74,6 +75,7 @@ final class AppModel {
     var conversionPrompt = ""
     var showImporter = false
     var confirmSetWallpaper = false
+    var showResolutionAlert = false   // popup right after choosing a very low-resolution video
     var restoreCandidate: AerialAsset?
     var isDropTargeted = false
     var hoveredAssetID: String?
@@ -97,6 +99,39 @@ final class AppModel {
     }
     var effectiveMotionMode: MotionMode { availableMotionModes.contains(motionMode) ? motionMode : .original }
     var interpolates: Bool { effectiveMotionMode != .original }
+    /// Up to 1920x1080 in the stored orientation; upright phone videos (1080x1920 shown) are stored as 1920x1080.
+    var canEnhance: Bool {
+        guard let info = sourceInfo, DetailEnhancer.isSupported else { return false }
+        return (info.width <= 1920 && info.height <= 1080) || (info.width <= 1080 && info.height <= 1920)
+    }
+    var enhances: Bool { canEnhance && enhanceDetail }
+
+    /// How much the video has to be enlarged to fill a 3840x2160 screen (aspect fill), e.g. 2.0 for 1080p.
+    var upscaleFactor: Double? {
+        guard let info = sourceInfo, info.width > 0, info.height > 0 else { return nil }
+        return max(Double(Transcoder.width) / Double(info.width), Double(Transcoder.height) / Double(info.height))
+    }
+
+    /// A hint about the source resolution: nil for 1080p and above, mild up to ~3x, severe beyond.
+    var resolutionHint: (severe: Bool, text: String)? {
+        guard let info = sourceInfo, let factor = upscaleFactor, factor > 2.05 else { return nil }
+        let size = "\(info.width)×\(info.height)"
+        let times = factor.formatted(.number.precision(.fractionLength(factor < 10 ? 1 : 0)))
+        if factor > 3 {
+            return (true, "Low resolution: this \(size) video has to be enlarged about \(times)× to fill a 4K screen, "
+                + "so the wallpaper will look blurry. For a sharp result, use a higher-quality version of the video, "
+                + "or upscale it beforehand with a dedicated tool (for example Topaz Video AI or Video2X).")
+        }
+        return (false, "Below 4K quality: this \(size) video is enlarged about \(times)×, so fine detail will look "
+            + "a little soft. A higher-resolution version would look sharper.")
+    }
+
+    /// Shown under the checkbox and in the confirmation: Enhance detail is slow and its benefit varies.
+    var enhanceWarning: String {
+        let minutes = max(1, Int(((trimEnd - trimStart) * Double(sourceInfo?.fps ?? 30) * 1.25 / 60).rounded()))
+        return "Uses a lot of processing power: about \(minutes) min extra for this clip, with the Mac working hard. "
+            + "Results vary: some videos look clearly sharper, others only slightly."
+    }
     var selectedLibraryItem: LibraryItem? { libraryItems.first { $0.id == selectedLibraryID } }
     /// "Set as Wallpaper" installs the selected library item when no new video is loaded.
     var isUsingLibrary: Bool { sourceURL == nil && selectedLibraryItem != nil }
@@ -258,6 +293,9 @@ final class AppModel {
                 trimEnd = info.duration
                 // Smooth by default when it's cheap enough to matter; 60 fps sources stay as recorded.
                 motionMode = availableMotionModes.contains(.smooth) ? .smooth : .original
+                enhanceDetail = false   // opt-in for each video: it is slow
+                // Tell the user right away, not only in the window, when the video is too small for 4K.
+                if resolutionHint?.severe == true { showResolutionAlert = true }
                 let player = AVPlayer(url: url)
                 player.isMuted = true   // the wallpaper has no sound either
                 self.player = player
@@ -360,6 +398,9 @@ final class AppModel {
         if interpolates, let fps = sourceInfo?.fps {
             seconds += length * max(0, Double(outputFPS) - Double(fps)) * 0.07
         }
+        if enhances, let fps = sourceInfo?.fps {
+            seconds += length * Double(fps) * 1.25   // ~1.25 s per source frame (ML 4x via 8K), measured
+        }
         return seconds < 90 ? "about \(Int(seconds.rounded())) seconds" : "about \(Int((seconds / 60).rounded())) minutes"
     }
 
@@ -396,14 +437,22 @@ final class AppModel {
         let options = TranscodeOptions(fps: outputFPS, trimStart: trimStart,
                                        trimEnd: trimEnd < info.duration ? trimEnd : nil,
                                        loopCrossfade: canSmoothLoop && smoothLoop ? Self.loopCrossfade : 0,
-                                       interpolate: interpolates)
+                                       interpolate: interpolates,
+                                       enhance: enhances)
+        let settings = LibrarySettings(fps: outputFPS,
+                                       motion: interpolates ? (effectiveMotionMode == .maximum ? "Maximum" : "Smooth") : nil,
+                                       enhanced: enhances, smoothLoop: options.loopCrossfade > 0)
         let destination = Self.workDir().appending(path: "\(UUID().uuidString).mov")
         let transcoder = Transcoder()
         self.transcoder = transcoder
         if let old = transcodedURL { try? FileManager.default.removeItem(at: old) }
         transcodedURL = nil
         player?.pause()
-        startProgress("Preparing your video in 4K")
+        var phase = enhances ? "Preparing your video in 4K with enhanced detail" : "Preparing your video in 4K"
+        if enhances && !DetailEnhancer.isModelReady(width: 1920, height: 1080) {
+            phase += " (first time: downloading Apple's enhancement model)"
+        }
+        startProgress(phase)
 
         Task.detached {
             do {
@@ -412,7 +461,7 @@ final class AppModel {
                 }
                 await MainActor.run {
                     self.transcodedURL = destination
-                    self.saveAndInstall(destination, over: asset)
+                    self.saveAndInstall(destination, settings: settings, over: asset)
                 }
             } catch {
                 await MainActor.run {
@@ -431,12 +480,12 @@ final class AppModel {
     }
 
     /// Keeps the finished video in the library (non-fatal if that fails), then installs it.
-    private func saveAndInstall(_ file: URL, over asset: AerialAsset) {
+    private func saveAndInstall(_ file: URL, settings: LibrarySettings, over asset: AerialAsset) {
         let name = displayName ?? "your video"
         showsProgress = false; phase = "Saving to your library"
         Task {
             do {
-                let item = try await library.add(file, name: name)
+                let item = try await library.add(file, name: name, settings: settings)
                 install(library.videoURL(item), name: name, libraryID: item.id, over: asset)
             } catch {
                 Log.error("Could not save to library: \(error.localizedDescription)")
@@ -452,6 +501,9 @@ final class AppModel {
                 try await store.install(file, sourceName: name, over: asset, protect: false, libraryID: libraryID)
                 removeTempFilesAfterInstall()
                 selectedLibraryID = nil
+                // Done with this video: show the drop area and the library (with the new wallpaper first) again.
+                player?.pause()
+                player = nil; sourceURL = nil; sourceInfo = nil; displayName = nil
                 notice = Notice(kind: .success, text: "“\(asset.name)” now plays “\(name)”. Lock your Mac to see it.")
             } catch {
                 fail(error)

@@ -8,6 +8,28 @@ struct LibraryItem: Codable, Identifiable, Hashable, Sendable {
     var addedAt: Date
     var duration: Double
     var bytes: Int64
+    // How it was made (nil for wallpapers saved before these were recorded).
+    var fps: Int? = nil
+    var motion: String? = nil       // "Smooth" / "Maximum" when frames were interpolated
+    var enhanced: Bool? = nil
+    var smoothLoop: Bool? = nil
+
+    /// Short labels for the library card, e.g. "60 fps · Smooth · Loop" (Enhanced is a badge on the thumbnail).
+    var settingsSummary: String? {
+        guard let fps else { return nil }
+        var parts = ["\(fps) fps"]
+        if let motion { parts.append(motion) }
+        if smoothLoop == true { parts.append("Loop") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// The settings a wallpaper was prepared with, stored alongside it in the library.
+struct LibrarySettings: Sendable {
+    var fps: Int
+    var motion: String?
+    var enhanced: Bool
+    var smoothLoop: Bool
 }
 
 /// Finished wallpapers in ~/Library/Application Support/AerialSwap/library: <id>.mov, <id>.jpg, library.json.
@@ -31,7 +53,7 @@ struct WallpaperLibrary: Sendable {
     }
 
     /// Clones a finished wallpaper into the library and saves a thumbnail.
-    func add(_ file: URL, name: String) async throws -> LibraryItem {
+    func add(_ file: URL, name: String, settings: LibrarySettings? = nil) async throws -> LibraryItem {
         let fm = FileManager.default
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
         let id = UUID().uuidString
@@ -43,7 +65,9 @@ struct WallpaperLibrary: Sendable {
         let asset = AVURLAsset(url: destination)
         let duration = (try? await asset.load(.duration).seconds) ?? 0
         let bytes = ((try? fm.attributesOfItem(atPath: destination.path))?[.size] as? NSNumber)?.int64Value ?? 0
-        let item = LibraryItem(id: id, name: name, addedAt: .now, duration: duration, bytes: bytes)
+        let item = LibraryItem(id: id, name: name, addedAt: .now, duration: duration, bytes: bytes,
+                               fps: settings?.fps, motion: settings?.motion, enhanced: settings?.enhanced,
+                               smoothLoop: settings?.smoothLoop)
         if let frame = await Self.middleFrame(of: destination),
            let jpeg = NSBitmapImageRep(cgImage: frame).representation(using: .jpeg, properties: [.compressionFactor: 0.8]) {
             try? jpeg.write(to: thumbnailURL(item))

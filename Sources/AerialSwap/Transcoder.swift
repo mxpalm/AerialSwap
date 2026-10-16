@@ -11,6 +11,7 @@ struct TranscodeOptions: Sendable {
     var freezeSeconds: Double = 0     // hold the last frame for this long (CLI only)
     var loopCrossfade: Double = 0     // seconds; crossfade the end into the start for a seamless loop
     var interpolate = false           // generate in-between frames when the source has fewer frames than the output
+    var enhance = false               // ML upscaling for sources up to 1080p (see DetailEnhancer)
 }
 
 /// Basic facts about a source video, shown in the UI.
@@ -31,6 +32,7 @@ enum TranscodeError: LocalizedError {
     case reader(String)
     case writer(String)
     case interpolation(String)
+    case enhancement(String)
     case cancelled
 
     var errorDescription: String? {
@@ -43,6 +45,7 @@ enum TranscodeError: LocalizedError {
         case .reader(let m): "Could not read the source video: \(m)"
         case .writer(let m): "Could not write the output file: \(m)"
         case .interpolation(let m): "Smooth motion failed: \(m)"
+        case .enhancement(let m): "Enhance detail failed: \(m)"
         case .cancelled: "Transcode cancelled."
         }
     }
@@ -136,6 +139,10 @@ final class Transcoder: @unchecked Sendable {
         let renderer = try CIFrameRenderer()
         let ciFill = Self.coreImageTransform(fill, sourceHeight: naturalSize.height)
         let toneMap = HDRToneMap()
+        // Enhance detail works on the stored frame, before rotation, so the limit applies to the natural size.
+        let enhance = options.enhance && DetailEnhancer.canEnhance(width: Int(naturalSize.width), height: Int(naturalSize.height))
+        if options.enhance && !enhance { Log.info("Enhance detail skipped: \(naturalSize) is larger than 1920x1080") }
+        if enhance { Log.info("Enhance detail: ML upscaling \(Int(naturalSize.width))x\(Int(naturalSize.height)) x4") }
 
         /// Opens a reader for [from, to) that serves output-grid frames relative to `from`.
         func makeSource(from: Double, to: Double) throws -> GridSource {
@@ -144,12 +151,20 @@ final class Transcoder: @unchecked Sendable {
                 kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
             ]
             let output: AVAssetReaderOutput
-            let render: (CVPixelBuffer) throws -> CVPixelBuffer
-            if hlg {
-                output = AVAssetReaderTrackOutput(track: track, outputSettings: frameSettings)
-                render = { frame in
-                    let image = CIImage(cvPixelBuffer: frame).transformed(by: ciFill).cropped(to: renderer.canvas)
-                    return try renderer.render(toneMap.apply(to: image))
+            let render: (CVPixelBuffer, Double) async throws -> CVPixelBuffer
+            if hlg || enhance {
+                // Raw frames, rendered with Core Image: HLG tone mapping and/or ML upscaling.
+                // Each reader gets its own enhancer, because the scaler keeps state from frame to frame.
+                let enhancer = enhance ? try DetailEnhancer(width: Int(naturalSize.width), height: Int(naturalSize.height)) : nil
+                var settings = enhancer?.sourceAttributes ?? frameSettings
+                settings[kCVPixelBufferIOSurfacePropertiesKey as String] = [String: Any]()
+                output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
+                render = { frame, time in
+                    var image = try await enhancer?.enhance(frame, time: CMTime(seconds: time, preferredTimescale: 6000))
+                        ?? CIImage(cvPixelBuffer: frame)
+                    image = image.transformed(by: ciFill).cropped(to: renderer.canvas)
+                    if hlg { image = toneMap.apply(to: image) }
+                    return try renderer.render(image)
                 }
             } else {
                 let composition = AVMutableVideoComposition()
@@ -167,7 +182,7 @@ final class Transcoder: @unchecked Sendable {
                 let compositionOutput = AVAssetReaderVideoCompositionOutput(videoTracks: [track], videoSettings: frameSettings)
                 compositionOutput.videoComposition = composition
                 output = compositionOutput
-                render = { $0 }
+                render = { frame, _ in frame }
             }
             output.alwaysCopiesSampleData = false
             let reader = try AVAssetReader(asset: asset)
@@ -197,7 +212,7 @@ final class Transcoder: @unchecked Sendable {
 
         /// The output frame for time `t`: the latest source frame, or an interpolated in-between frame.
         func outputFrame(_ source: GridSource, at t: Double) async throws -> CVPixelBuffer? {
-            guard let pair = try source.pair(at: t) else { return nil }
+            guard let pair = try await source.pair(at: t) else { return nil }
             guard let interpolator, let next = pair.next, pair.phase > 0.02 else { return pair.current }
             if pair.phase > 0.98 { return next }
             return try await interpolator.interpolate(from: pair.current, to: next, phase: pair.phase)
@@ -394,14 +409,14 @@ private final class CIFrameRenderer {
 private final class GridSource {
     private let reader: AVAssetReader
     private let output: AVAssetReaderOutput
-    private let render: (CVPixelBuffer) throws -> CVPixelBuffer
+    private let render: (CVPixelBuffer, Double) async throws -> CVPixelBuffer
     private let offset: Double
     private var current: (time: Double, buffer: CVPixelBuffer)?
     private var next: (time: Double, buffer: CVPixelBuffer)?
     private var rendered: CVPixelBuffer?
     private var renderedNext: CVPixelBuffer?
 
-    init(reader: AVAssetReader, output: AVAssetReaderOutput, render: @escaping (CVPixelBuffer) throws -> CVPixelBuffer,
+    init(reader: AVAssetReader, output: AVAssetReaderOutput, render: @escaping (CVPixelBuffer, Double) async throws -> CVPixelBuffer,
          offset: Double) throws {
         self.reader = reader
         self.output = output
@@ -414,7 +429,7 @@ private final class GridSource {
     }
 
     /// The latest frame with pts <= time, the frame after it (if any) and how far `time` lies between them.
-    func pair(at time: Double) throws -> (current: CVPixelBuffer, next: CVPixelBuffer?, phase: Double)? {
+    func pair(at time: Double) async throws -> (current: CVPixelBuffer, next: CVPixelBuffer?, phase: Double)? {
         // Advance while the following frame is due; the very first frame is used even if it starts late.
         while let upcoming = next, current == nil || upcoming.time <= time + 1e-6 {
             current = upcoming
@@ -426,9 +441,9 @@ private final class GridSource {
             throw TranscodeError.reader(reader.error?.localizedDescription ?? "unknown error")
         }
         guard let current else { return nil }
-        if rendered == nil { rendered = try render(current.buffer) }
+        if rendered == nil { rendered = try await render(current.buffer, current.time) }
         guard let upcoming = next, upcoming.time > current.time else { return (rendered!, nil, 0) }
-        if renderedNext == nil { renderedNext = try render(upcoming.buffer) }
+        if renderedNext == nil { renderedNext = try await render(upcoming.buffer, upcoming.time) }
         let phase = (time - current.time) / (upcoming.time - current.time)
         return (rendered!, renderedNext, min(max(phase, 0), 1))
     }

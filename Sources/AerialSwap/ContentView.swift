@@ -40,6 +40,12 @@ struct ContentView: View {
         } message: {
             Text(confirmText)
         }
+        .alert("Low-resolution video", isPresented: $model.showResolutionAlert) {
+            Button("Choose Another Video…") { model.showImporter = true }
+            Button("Continue Anyway", role: .cancel) {}
+        } message: {
+            Text(model.resolutionHint?.text ?? "")
+        }
         .confirmationDialog("Restore Apple's original?", isPresented: restoreBinding) {
             Button("Restore Original") { if let a = model.restoreCandidate { model.restore(a) } }
         } message: {
@@ -66,8 +72,10 @@ struct ContentView: View {
                 + "so this only takes a few seconds."
         }
         let video = model.displayName ?? ""
+        var warning = model.enhances ? "\n\nEnhance detail: \(model.enhanceWarning)" : ""
+        if let hint = model.resolutionHint, hint.severe { warning += "\n\n\(hint.text)" }
         return "“\(target)” will play “\(video)”.\n\nPreparing the video takes \(model.estimateText). "
-            + "Apple's original is backed up first and can be restored at any time."
+            + "Apple's original is backed up first and can be restored at any time." + warning
     }
 
     private var restoreBinding: Binding<Bool> {
@@ -176,6 +184,12 @@ struct ContentView: View {
         }
     }
 
+    /// "0:15.0 · 27.5 MB · 16 Oct" (length, size, date saved).
+    private func libraryDetails(_ item: LibraryItem) -> String {
+        let date = item.addedAt.formatted(.dateTime.day().month(.abbreviated))
+        return "\(clock(item.duration)) · \(item.bytes.formatted(.byteCount(style: .file))) · \(date)"
+    }
+
     private var librarySection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
@@ -190,7 +204,8 @@ struct ContentView: View {
                     ForEach(model.libraryItems) { item in
                         LibraryCard(item: item,
                                     image: model.libraryThumbnails[item.id],
-                                    details: "\(clock(item.duration)) · \(item.bytes.formatted(.byteCount(style: .file)))",
+                                    details: libraryDetails(item),
+                                    settings: item.settingsSummary,
                                     playingOn: model.playingAerials(for: item),
                                     isSelected: model.selectedLibraryID == item.id,
                                     isHovered: model.hoveredLibraryID == item.id,
@@ -253,6 +268,16 @@ struct ContentView: View {
 
             FlowChips(chips: chips(for: info))
 
+            if let hint = model.resolutionHint {
+                Label(hint.text, systemImage: hint.severe ? "exclamationmark.triangle.fill" : "info.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(hint.severe ? Color.orange : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(8)
+                    .background(RoundedRectangle(cornerRadius: 8)
+                        .fill((hint.severe ? Color.orange : Color.blue).opacity(0.12)))
+            }
+
             Divider()
 
             VStack(alignment: .leading, spacing: 4) {
@@ -288,6 +313,20 @@ struct ContentView: View {
                     .controlSize(.small)
                     .help("Smooth and Maximum generate real in-between frames, so motion and the slow-down after "
                           + "unlocking stay fluid. Maximum doubles the frames again (120 fps) and takes about twice as long.")
+                }
+                if model.canEnhance {
+                    Toggle("Enhance detail (experimental)", isOn: $model.enhanceDetail)
+                        .toggleStyle(.checkbox)
+                        .font(.callout)
+                        .help("Uses Apple's on-device ML upscaler for videos up to 1080p instead of normal scaling. "
+                              + "Takes about 30-40x the clip length and downloads a model once. Results vary.")
+                    if model.enhanceDetail {
+                        Label(model.enhanceWarning, systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .transition(.opacity)
+                    }
                 }
             }
 
@@ -327,7 +366,8 @@ struct ContentView: View {
         let loop = model.smoothLoop && model.canSmoothLoop ? " · seamless loop" : ""
         let fps = model.interpolates
             ? "\(model.outputFPS) fps, smoothed from \(Int(info.fps.rounded()))" : "\(model.outputFPS) fps"
-        let base = "4K HEVC · \(fps) · no sound" + loop
+        let enhanced = model.enhances ? " · enhanced detail" : ""
+        let base = "4K HEVC · \(fps) · no sound" + enhanced + loop
         return info.hdr == nil ? base : base + " · converted to SDR"
     }
 
@@ -692,6 +732,7 @@ private struct LibraryCard: View {
     let item: LibraryItem
     let image: NSImage?
     let details: String
+    let settings: String?
     let playingOn: [String]
     let isSelected: Bool
     let isHovered: Bool
@@ -713,6 +754,9 @@ private struct LibraryCard: View {
                     Badge(text: "On \(playingOn.joined(separator: ", "))", color: .green).padding(6)
                 }
             }
+            .overlay(alignment: .bottomLeading) {
+                if item.enhanced == true { Badge(text: "✦ Enhanced", color: .purple).padding(6) }
+            }
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay {
                 RoundedRectangle(cornerRadius: 8)
@@ -727,12 +771,16 @@ private struct LibraryCard: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.name).font(.caption.weight(.semibold)).lineLimit(1).truncationMode(.middle)
                 Text(details).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                if let settings {
+                    Text(settings).font(.caption2.weight(.medium)).foregroundStyle(.tertiary).lineLimit(1)
+                }
             }
             .padding(.horizontal, 2)
         }
         .frame(width: 160)
         .contentShape(Rectangle())
-        .help(item.name)
+        .help("\(item.name)\nSaved \(item.addedAt.formatted(date: .abbreviated, time: .shortened))"
+              + (settings.map { "\n\($0)" } ?? "") + (item.enhanced == true ? " · Enhanced detail" : ""))
     }
 
     @ViewBuilder private var cornerControl: some View {

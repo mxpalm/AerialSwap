@@ -20,6 +20,9 @@ open /Applications/AerialSwap.app
 
 1. Drop a video on the window (or **Choose…**). Duration and resolution are shown with a preview.
    Any length works; Apple doesn't require a specific duration.
+   Low-resolution videos get a hint: a note for ~720p (about 3x enlargement to fill 4K), and a popup plus
+   warning when it's more than 3x (e.g. 736x414), suggesting a higher-quality version or upscaling it
+   beforehand with a dedicated tool (e.g. Topaz Video AI or Video2X).
    - MP4/MOV with H.264 or HEVC (and AV1 on Macs with an AV1 decoder) are read directly.
    - Anything else (e.g. YouTube's WebM/VP9) needs [ffmpeg](https://ffmpeg.org) (`brew install ffmpeg`).
      AerialSwap asks before converting it into a temporary HEVC file (video only, original size and fps).
@@ -36,6 +39,13 @@ open /Applications/AerialSwap.app
    - *Smooth · 60 fps* (default for 24/30 fps videos): ~4x real time to prepare.
    - *Maximum · 120 fps* (also offered for 60 fps videos): twice the frames again, ~10x real time.
    - *Original*: frames as recorded (repeated to fill 60 fps).
+   **Enhance detail (experimental)** (opt-in, for videos up to 1080p, including upright phone videos) uses Apple's
+   on-device ML upscaler (`VTSuperResolutionScaler`) instead of normal scaling. On test footage text, edges and
+   textures came out sharper; on real videos the result varies from clearly sharper to only slightly better,
+   so the app shows a warning when it's turned on. It only supports 4x, so 1080p goes via 8K: ~1.25 s per source frame, ~30–40x the clip length.
+   macOS downloads the model once (a few seconds). The model output is ~3% darker, so each frame is
+   brightness-matched to the original. A noise filter (`VTTemporalNoiseFilter`) was tested too and gave no
+   measurable improvement on compressed web videos, so it isn't used.
 4. **Set as Wallpaper…** asks once, then transcodes (with a time estimate) and installs: Apple's original
    is backed up once, the file is swapped atomically, `WallpaperAgent` is restarted and temp files are deleted.
 5. Make sure the target Aerial is selected as your wallpaper in System Settings → Wallpaper.

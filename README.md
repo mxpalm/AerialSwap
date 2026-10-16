@@ -111,6 +111,24 @@ AerialSwap only writes `videos/<id>.mov` of the selected asset (via a temp file 
 in the same folder) and its own folders. It never touches `entries.json`, `manifest.tar`,
 `Index.plist`, and never uses sudo.
 
+## Testing
+
+A repeatable test suite checks every module with synthetic footage (needs ffmpeg, test-only):
+
+```sh
+Tools/testsuite/generate.sh       # once: 23 clips into TestFootage/ (git-ignored, ~260 MB, ~35 s)
+Tools/testsuite/run.py --quick    # ~3 min, skips 4K sources and Enhance detail
+Tools/testsuite/run.py            # all 30 cases, ~6 min
+Tools/testsuite/run.py -k hdr     # only matching cases
+```
+
+Footage: 720p (24/30/60 fps), 1080p (24/30/60/120/240), 4K (24/30/60/120), 21:9 widescreen, 736x414,
+a 2 s clip, an upright phone video, HDR10 and HLG gray patches (also rotated), and a procedural landscape for
+Enhance detail. Each output is checked for format (HEVC Main 10, hvc1, 3840x2160, 10-bit, no audio, color
+tags, temporal-layer sample groups), automatic frame rate, exact frame count with and without Smooth loop,
+repeated frames with Smooth motion (< 5%), HDR patch levels, orientation, and Enhance detail brightness.
+The suite only writes to `TestFootage/out/`, never to the aerials folder.
+
 ## Manual restore
 
 If the app is gone or something went wrong (replace `<ID>` with the asset ID):

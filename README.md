@@ -46,8 +46,9 @@ or **Keep Apple's**. **Restore Apple's Original…** puts Apple's file back.
    loop has no visible cut. The result is 1 s shorter; it needs a clip of at least 3 s.
    **Motion** (shown when the video has fewer frames than it could use) generates real in-between frames
    with VideoToolbox's optical-flow frame rate conversion, so the slow-down after unlocking doesn't stutter:
-   - *Smooth · 60 fps* (default for 24/30 fps videos): ~4x real time to prepare.
-   - *Maximum · 120 fps* (also offered for 60 fps videos): twice the frames again, ~10x real time.
+   - *Smooth · 60 fps* (default for 24/30 fps videos): ~2.5x real time to prepare.
+   - *Maximum · 120 fps* (also offered for 60 fps videos): twice the frames again, ~3x real time.
+   All in-between frames of a pair of source frames come from one optical-flow pass.
    - *Original*: frames as recorded (repeated to fill 60 fps).
    **Enhance detail (experimental)** (opt-in, for videos up to 1080p, including upright phone videos) uses Apple's
    on-device ML upscaler (`VTSuperResolutionScaler`) instead of normal scaling. On test footage text, edges and

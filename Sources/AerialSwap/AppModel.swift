@@ -896,12 +896,13 @@ final class AppModel {
     // MARK: - Set as wallpaper
 
     /// Rough duration estimate for the confirmation: ~1.15x real time at 60 fps, scaling with fps,
-    /// plus ~70 ms per generated 4K frame for Smooth motion (measured on Apple Silicon).
+    /// plus ~40 ms per source frame for Smooth motion: all in-between frames of a pair come from one optical-flow pass
+    /// (measured on an M3 Pro: 25 -> 60 fps adds ~1.1x the clip length, 25 -> 120 fps less, as it overlaps the encoder).
     var estimateText: String {
         let length = max(1, trimEnd - trimStart)
         var seconds = length * Double(outputFPS) / 60 * 1.15
         if interpolates, let fps = sourceInfo?.fps {
-            seconds += length * max(0, Double(outputFPS) - Double(fps)) * 0.07
+            seconds += length * Double(fps) * 0.04
         }
         if enhances, let fps = sourceInfo?.fps {
             seconds += length * Double(fps) * 1.25   // ~1.25 s per source frame (ML 4x via 8K), measured

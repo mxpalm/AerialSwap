@@ -46,19 +46,25 @@ final class FrameInterpolator {
         VTPixelTransferSessionInvalidate(toYUV)
     }
 
-    /// Returns the frame at `phase` (0...1) between `from` and `to`, as a 10-bit 4:2:0 buffer.
-    func interpolate(from: CVPixelBuffer, to: CVPixelBuffer, phase: Double) async throws -> CVPixelBuffer {
+    /// Returns the frames at `phases` (each 0...1) between `from` and `to`, as 10-bit 4:2:0 buffers.
+    /// All in-between frames of a pair come from one call, so the optical flow is computed once per pair.
+    /// `inOrder`: the pair follows the previous one (lets the processor reuse work from it).
+    func interpolate(from: CVPixelBuffer, to: CVPixelBuffer, phases: [Double], inOrder: Bool) async throws -> [CVPixelBuffer] {
+        guard !phases.isEmpty else { return [] }
         let a = try rgba(from), b = try rgba(to)
-        let destination = try Self.buffer(from: rgbaPool)
-        // The processor only needs relative timing; place the pair 1 s apart and the target at `phase`.
+        let destinations = try phases.map { _ in try Self.buffer(from: rgbaPool) }
+        // The processor only needs relative timing; place the pair 1 s apart and the targets at their phases.
         let timescale: CMTimeScale = 100_000
-        guard let source = VTFrameProcessorFrame(buffer: a, presentationTimeStamp: CMTime(value: 0, timescale: timescale)),
+        let targets = zip(destinations, phases).compactMap { buffer, phase in
+            VTFrameProcessorFrame(buffer: buffer, presentationTimeStamp: CMTime(value: CMTimeValue(phase * Double(timescale)), timescale: timescale))
+        }
+        guard targets.count == phases.count,
+              let source = VTFrameProcessorFrame(buffer: a, presentationTimeStamp: CMTime(value: 0, timescale: timescale)),
               let next = VTFrameProcessorFrame(buffer: b, presentationTimeStamp: CMTime(value: CMTimeValue(timescale), timescale: timescale)),
-              let target = VTFrameProcessorFrame(buffer: destination,
-                                                 presentationTimeStamp: CMTime(value: CMTimeValue(phase * Double(timescale)), timescale: timescale)),
               let parameters = VTFrameRateConversionParameters(sourceFrame: source, nextFrame: next, opticalFlow: nil,
-                                                               interpolationPhase: [Float(phase)], submissionMode: .random,
-                                                               destinationFrames: [target])
+                                                               interpolationPhase: phases.map { Float($0) },
+                                                               submissionMode: inOrder ? .sequential : .random,
+                                                               destinationFrames: targets)
         else { throw TranscodeError.interpolation("invalid frame parameters") }
 
         // The callback API is used on purpose: the Swift async overload returned before the work was done
@@ -68,11 +74,13 @@ final class FrameInterpolator {
         }
         if let failure { throw TranscodeError.interpolation(failure.localizedDescription) }
 
-        let output = try Self.buffer(from: yuvPool)
-        copyColorAttachments(from: from, to: output)
-        let status = VTPixelTransferSessionTransferImage(toYUV, from: destination, to: output)
-        guard status == noErr else { throw TranscodeError.interpolation("pixel transfer failed (\(status))") }
-        return output
+        return try destinations.map { destination in
+            let output = try Self.buffer(from: yuvPool)
+            copyColorAttachments(from: from, to: output)
+            let status = VTPixelTransferSessionTransferImage(toYUV, from: destination, to: output)
+            guard status == noErr else { throw TranscodeError.interpolation("pixel transfer failed (\(status))") }
+            return output
+        }
     }
 
     private func rgba(_ frame: CVPixelBuffer) throws -> CVPixelBuffer {

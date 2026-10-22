@@ -218,12 +218,31 @@ final class Transcoder: @unchecked Sendable {
             progress(Double(frameIndex) / Double(totalFrames))
         }
 
-        /// The output frame for time `t`: the latest source frame, or an interpolated in-between frame.
+        // In-between frames of the current pair of each reader, keyed by output frame index (see outputFrame).
+        var inBetween: [ObjectIdentifier: (pair: [ObjectIdentifier], frames: [Int: CVPixelBuffer])] = [:]
+        var interleaved = false   // two readers alternate during the loop crossfade
+
+        /// The output frame for time `t` (a multiple of 1/fps): the latest source frame, or an in-between frame.
+        /// The first request for a pair interpolates all of the pair's output frames in one call.
         func outputFrame(_ source: GridSource, at t: Double) async throws -> CVPixelBuffer? {
             guard let pair = try await source.pair(at: t) else { return nil }
             guard let interpolator, let next = pair.next, pair.phase > 0.02 else { return pair.current }
             if pair.phase > 0.98 { return next }
-            return try await interpolator.interpolate(from: pair.current, to: next, phase: pair.phase)
+            let index = Int((t * Double(fps)).rounded())
+            let key = ObjectIdentifier(source), pairID = [ObjectIdentifier(pair.current), ObjectIdentifier(next)]
+            if let cached = inBetween[key], cached.pair == pairID, let frame = cached.frames[index] { return frame }
+            let span = pair.nextTime - pair.currentTime
+            let first = Int((pair.currentTime * Double(fps)).rounded(.up))
+            let last = Int((pair.nextTime * Double(fps)).rounded(.down))
+            var indices: [Int] = [], phases: [Double] = []
+            for k in max(first, index)...max(last, index) {
+                let phase = (Double(k) / Double(fps) - pair.currentTime) / span
+                guard phase > 0.02, phase <= 0.98 else { continue }
+                indices.append(k); phases.append(phase)
+            }
+            let frames = try await interpolator.interpolate(from: pair.current, to: next, phases: phases, inOrder: !interleaved)
+            inBetween[key] = (pairID, Dictionary(uniqueKeysWithValues: zip(indices, frames)))
+            return inBetween[key]?.frames[index] ?? pair.current
         }
 
         let main = try makeSource(from: start + fade, to: end)
@@ -234,7 +253,7 @@ final class Transcoder: @unchecked Sendable {
                 guard var frame = try await outputFrame(main, at: Double(k) / Double(fps)) else { break }
                 let j = k - (clipFrames - fadeFrames)
                 if fadeFrames > 0, j >= 0 {
-                    if head == nil { head = try makeSource(from: start, to: start + fade) }
+                    if head == nil { head = try makeSource(from: start, to: start + fade); interleaved = true }
                     if let head, let headFrame = try await outputFrame(head, at: Double(j) / Double(fps)) {
                         let x = Double(j + 1) / Double(fadeFrames)
                         frame = try renderer.dissolve(from: frame, to: headFrame, amount: x * x * (3 - 2 * x))   // smoothstep
@@ -436,8 +455,10 @@ private final class GridSource {
         next = read()
     }
 
-    /// The latest frame with pts <= time, the frame after it (if any) and how far `time` lies between them.
-    func pair(at time: Double) async throws -> (current: CVPixelBuffer, next: CVPixelBuffer?, phase: Double)? {
+    /// The latest frame with pts <= time, the frame after it (if any), how far `time` lies between them,
+    /// and both frames' times (relative to the range start, like `time`).
+    func pair(at time: Double) async throws
+        -> (current: CVPixelBuffer, next: CVPixelBuffer?, phase: Double, currentTime: Double, nextTime: Double)? {
         // Advance while the following frame is due; the very first frame is used even if it starts late.
         while let upcoming = next, current == nil || upcoming.time <= time + 1e-6 {
             current = upcoming
@@ -450,10 +471,10 @@ private final class GridSource {
         }
         guard let current else { return nil }
         if rendered == nil { rendered = try await render(current.buffer, current.time) }
-        guard let upcoming = next, upcoming.time > current.time else { return (rendered!, nil, 0) }
+        guard let upcoming = next, upcoming.time > current.time else { return (rendered!, nil, 0, current.time, current.time) }
         if renderedNext == nil { renderedNext = try await render(upcoming.buffer, upcoming.time) }
         let phase = (time - current.time) / (upcoming.time - current.time)
-        return (rendered!, renderedNext, min(max(phase, 0), 1))
+        return (rendered!, renderedNext, min(max(phase, 0), 1), current.time, upcoming.time)
     }
 
     func cancel() { reader.cancelReading() }

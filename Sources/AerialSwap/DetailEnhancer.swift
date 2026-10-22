@@ -7,8 +7,17 @@ import VideoToolbox
 /// It only supports 4x, so 1080p becomes 8K and is scaled down to 4K afterwards (one resample, in Core Image).
 /// Measured on test footage: visibly sharper text, edges and texture than plain scaling, but ~1.1 s per frame.
 /// The model output is ~3% darker than its input, so every frame is brightness-matched to the source.
+/// One session needs ~5 GB, so a transcode creates only one and gives each reader its own `Stream`.
 final class DetailEnhancer {
     static let scaleFactor = 4
+
+    /// The frame history of one run of consecutive frames: the scaler uses the previous frame and its output.
+    final class Stream {
+        fileprivate var previous: VTFrameProcessorFrame?
+        fileprivate var previousOutput: VTFrameProcessorFrame?
+        /// False while frames of several streams are interleaved (the loop crossfade).
+        var inOrder = true
+    }
 
     static var isSupported: Bool { VTSuperResolutionScalerConfiguration.isSupported }
 
@@ -22,8 +31,6 @@ final class DetailEnhancer {
     private let pool: CVPixelBufferPool
     private let context = CIContext(options: [.workingColorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!,
                                               .cacheIntermediates: false])
-    private var previous: VTFrameProcessorFrame?
-    private var previousOutput: VTFrameProcessorFrame?
 
     /// The pixel buffer attributes the scaler needs on its input (16-bit half-float RGBA).
     var sourceAttributes: [String: Any] { config.sourcePixelBufferAttributes }
@@ -66,14 +73,15 @@ final class DetailEnhancer {
 
     /// Upscales one frame 4x and returns it in the source frame's coordinate space (scaled back by 1/4),
     /// so the caller's rotate/crop/fill transform applies unchanged and Core Image resamples only once.
-    func enhance(_ frame: CVPixelBuffer, time: CMTime) async throws -> CIImage {
+    func enhance(_ frame: CVPixelBuffer, time: CMTime, stream: Stream) async throws -> CIImage {
         var output: CVPixelBuffer?
         guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &output) == kCVReturnSuccess, let output,
               let source = VTFrameProcessorFrame(buffer: frame, presentationTimeStamp: time),
               let destination = VTFrameProcessorFrame(buffer: output, presentationTimeStamp: time),
-              let parameters = VTSuperResolutionScalerParameters(sourceFrame: source, previousFrame: previous,
-                                                                 previousOutputFrame: previousOutput, opticalFlow: nil,
-                                                                 submissionMode: .sequential, destinationFrame: destination)
+              let parameters = VTSuperResolutionScalerParameters(sourceFrame: source, previousFrame: stream.previous,
+                                                                 previousOutputFrame: stream.previousOutput, opticalFlow: nil,
+                                                                 submissionMode: stream.inOrder ? .sequential : .random,
+                                                                 destinationFrame: destination)
         else { throw TranscodeError.enhancement("invalid frame parameters") }
 
         // Callback API on purpose, as in FrameInterpolator: the Swift async overload returned early (macOS 27.0.1).
@@ -81,8 +89,8 @@ final class DetailEnhancer {
             processor.process(parameters: parameters) { _, error in done.resume(returning: error) }
         }
         if let failure { throw TranscodeError.enhancement(failure.localizedDescription) }
-        previous = source
-        previousOutput = destination
+        stream.previous = source
+        stream.previousOutput = destination
         CVBufferPropagateAttachments(frame, output)
 
         let original = CIImage(cvPixelBuffer: frame)

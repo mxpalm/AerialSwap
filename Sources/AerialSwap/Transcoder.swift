@@ -143,6 +143,9 @@ final class Transcoder: @unchecked Sendable {
         let enhance = options.enhance && DetailEnhancer.canEnhance(width: Int(naturalSize.width), height: Int(naturalSize.height))
         if options.enhance && !enhance { Log.info("Enhance detail skipped: \(naturalSize) is larger than 1920x1080") }
         if enhance { Log.info("Enhance detail: ML upscaling \(Int(naturalSize.width))x\(Int(naturalSize.height)) x4") }
+        // One scaler session for both readers: a second one (for the loop crossfade) would need another ~5 GB.
+        let enhancer = enhance ? try DetailEnhancer(width: Int(naturalSize.width), height: Int(naturalSize.height)) : nil
+        var enhanceStreams: [DetailEnhancer.Stream] = []
 
         /// Opens a reader for [from, to) that serves output-grid frames relative to `from`.
         func makeSource(from: Double, to: Double) throws -> GridSource {
@@ -154,13 +157,18 @@ final class Transcoder: @unchecked Sendable {
             let render: (CVPixelBuffer, Double) async throws -> CVPixelBuffer
             if hlg || enhance {
                 // Raw frames, rendered with Core Image: HLG tone mapping and/or ML upscaling.
-                // Each reader gets its own enhancer, because the scaler keeps state from frame to frame.
-                let enhancer = enhance ? try DetailEnhancer(width: Int(naturalSize.width), height: Int(naturalSize.height)) : nil
+                // Each reader has its own frame history, because the scaler uses the previous frame. While two
+                // readers are interleaved (loop crossfade), frames are no longer in order for the scaler.
+                let stream = DetailEnhancer.Stream()
+                enhanceStreams.append(stream)
+                if enhanceStreams.count > 1 { for s in enhanceStreams { s.inOrder = false } }
                 var settings = enhancer?.sourceAttributes ?? frameSettings
                 settings[kCVPixelBufferIOSurfacePropertiesKey as String] = [String: Any]()
                 output = AVAssetReaderTrackOutput(track: track, outputSettings: settings)
                 render = { frame, time in
-                    var image = try await enhancer?.enhance(frame, time: CMTime(seconds: time, preferredTimescale: 6000))
+                    // Source time (not reader-relative), so the two readers' frames never share a timestamp.
+                    let sourceTime = CMTime(seconds: time + from, preferredTimescale: 6000)
+                    var image = try await enhancer?.enhance(frame, time: sourceTime, stream: stream)
                         ?? CIImage(cvPixelBuffer: frame)
                     image = image.transformed(by: ciFill).cropped(to: renderer.canvas)
                     if hlg { image = toneMap.apply(to: image) }

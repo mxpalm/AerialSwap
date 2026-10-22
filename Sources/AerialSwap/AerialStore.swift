@@ -48,7 +48,8 @@ enum StoreError: LocalizedError {
 }
 
 /// Reads Apple's Aerial store and performs backup / install / restore.
-/// Only ever writes videos/<id>.mov (plus a temp file next to it) and AerialSwap's own folders.
+/// Writes videos/<id>.mov (plus a temp file next to it), AerialSwap's own folders, and, only when the user picks
+/// which Aerial the desktop or screen saver uses, the assetID inside Store/Index.plist's existing Aerial choices.
 struct AerialStore: Sendable {
     let home = FileManager.default.homeDirectoryForCurrentUser
     var wallpaperDir: URL { home.appending(path: "Library/Application Support/com.apple.wallpaper") }
@@ -124,6 +125,57 @@ struct AerialStore: Sendable {
         }
         walk(root, context: "")
         return (desktop, idle)
+    }
+
+    /// Points every existing Aerial choice for the desktop and/or screen saver at `assetID`, on all displays and
+    /// Spaces, then restarts WallpaperAgent so it reads the change. Choices that aren't Aerials (photos, colors) are
+    /// left alone, so a slot can only be switched when it already shows an Aerial. Returns how many choices changed.
+    /// The previous file is kept as backups/Index.plist.before-change.
+    @discardableResult
+    func setSelection(_ assetID: String, desktop: Bool, idle: Bool) throws -> Int {
+        let data: Data
+        var format = PropertyListSerialization.PropertyListFormat.binary
+        let root: Any
+        do {
+            data = try Data(contentsOf: indexURL)
+            root = try PropertyListSerialization.propertyList(from: data, format: &format)
+        } catch {
+            throw StoreError.fileOperation("Reading the wallpaper settings", error)
+        }
+        let configuration = try PropertyListSerialization.data(fromPropertyList: ["assetID": assetID], format: .binary, options: 0)
+        var changed = 0
+        func rewrite(_ node: Any, context: String) -> Any {
+            if var dict = node as? [String: Any] {
+                if dict["Provider"] as? String == Self.aerialsProvider, dict["Configuration"] is Data,
+                   (context == "Desktop" && desktop) || (context == "Idle" && idle) {
+                    dict["Configuration"] = configuration
+                    changed += 1
+                }
+                for (key, value) in dict {
+                    dict[key] = rewrite(value, context: (key == "Desktop" || key == "Idle") ? key : context)
+                }
+                return dict
+            }
+            if let array = node as? [Any] { return array.map { rewrite($0, context: context) } }
+            return node
+        }
+        let updated = rewrite(root, context: "")
+        guard changed > 0 else { return 0 }
+
+        let fm = FileManager.default
+        try fm.createDirectory(at: backupsDir, withIntermediateDirectories: true)
+        let backup = backupsDir.appending(path: "Index.plist.before-change")
+        try? fm.removeItem(at: backup)
+        try data.write(to: backup)
+        do {
+            let out = try PropertyListSerialization.data(fromPropertyList: updated, format: format, options: 0)
+            try out.write(to: indexURL, options: .atomic)
+        } catch {
+            throw StoreError.fileOperation("Saving the wallpaper settings", error)
+        }
+        Log.info("Selection: \(assetID) for \([desktop ? "desktop" : nil, idle ? "screen saver" : nil].compactMap { $0 }.joined(separator: " + ")) (\(changed) choices)")
+        restartWallpaperAgent()
+        return changed
     }
 
     func loadState() -> [String: InstallRecord] {

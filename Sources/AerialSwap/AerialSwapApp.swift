@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import Synchronization
 
-/// Entry point: runs the SwiftUI app, or a small CLI when started with --transcode / --list.
+/// Entry point: runs the SwiftUI app, or a small CLI when started with --transcode / --list / --snapshot.
 @main
 enum Main {
     static func main() {
@@ -10,6 +10,11 @@ enum Main {
         if args.first == "--transcode" || args.first == "--list" {
             Task { exit(await CLI.run(args)) }
             dispatchMain()
+        }
+        if args.first == "--snapshot" {
+            // ImageRenderer needs the real main thread, so keep its run loop going (dispatchMain would exit it).
+            Task { @MainActor in exit(await Snapshot.run(args)) }
+            RunLoop.main.run()
         }
         AerialSwapApp.main()
     }
@@ -23,8 +28,9 @@ struct AerialSwapApp: App {
         Window("AerialSwap", id: "main") {
             ContentView(model: model)
         }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
+        .windowToolbarStyle(.unified(showsTitle: false))   // controls on the row of the traffic lights
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 1180, height: 760)
     }
 }
 

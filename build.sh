@@ -20,6 +20,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/AerialSwap"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"   # regenerate with Tools/make_icon.swift
+# Optional Pixabay API key for Discover (git-ignored; see README).
+[[ -f Resources/pixabay.key ]] && cp Resources/pixabay.key "$APP/Contents/Resources/pixabay.key"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

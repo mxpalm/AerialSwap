@@ -18,20 +18,30 @@ open /Applications/AerialSwap.app
 
 ## Usage
 
-1. Drop a video on the window (or **Choose…**). Duration and resolution are shown with a preview.
+The window always shows a video full size, the way the lock screen will: the Aerial you picked on
+**Now Playing**, the wallpaper you're previewing in the **Library**, or the new video while you set it up.
+On first launch a welcome screen checks this Mac (downloaded Aerials, Enhance detail support, ffmpeg).
+
+**Now Playing** (home) shows what the selected Aerial plays, with a row of every downloaded Aerial and its
+status: *Apple original*, your video, or *Reset by macOS*. When macOS has put Apple's video back (usually after
+an update), a dialog offers **Reinstall My Video** (AerialSwap keeps a copy of every installed video for this)
+or **Keep Apple's**. **Restore Apple's Original…** puts Apple's file back.
+
+1. Drop a video anywhere on the window (or **Add Video**). It plays full size with the lock-screen clock over it.
    Any length works; Apple doesn't require a specific duration.
-   Low-resolution videos get a hint: a note for ~720p (about 3x enlargement to fill 4K), and a popup plus
-   warning when it's more than 3x (e.g. 736x414), suggesting a higher-quality version or upscaling it
+   Low-resolution videos get a hint: a note for ~720p (about 3x enlargement to fill 4K), and a dialog
+   when it's more than 3x (e.g. 736x414), suggesting a higher-quality version, Enhance detail, or upscaling it
    beforehand with a dedicated tool (e.g. Topaz Video AI or Video2X).
    - MP4/MOV with H.264 or HEVC (and AV1 on Macs with an AV1 decoder) are read directly.
    - Anything else (e.g. YouTube's WebM/VP9) needs [ffmpeg](https://ffmpeg.org) (`brew install ffmpeg`).
      AerialSwap asks before converting it into a temporary HEVC file (video only, original size and fps).
      Without ffmpeg it tells you to convert the file yourself.
-2. Pick the **Target Aerial** (shown with its thumbnail). Only Aerials that are downloaded on this Mac
+2. Pick the Aerial it **Replaces**. Only Aerials that are downloaded on this Mac
    are listed. Your current Desktop aerial is preselected (read from `Store/Index.plist`); otherwise the
-   screen saver one.
-3. Optional: to use only part of the clip, click **Trim…** for QuickTime's trim bar on the preview,
-   or type start/end seconds into **Trim**. The output frame rate is picked automatically (see below).
+   screen saver one. The name is what the wallpaper is called in your library.
+3. Optional: to use only part of the clip, drag the blue handles on the filmstrip at the bottom; the
+   preview shows the frame under the handle and then loops the new range. The output frame rate is picked
+   automatically (see below).
    **Smooth loop** (on by default) crossfades the clip's last second into its first, so the lock screen
    loop has no visible cut. The result is 1 s shorter; it needs a clip of at least 3 s.
    **Motion** (shown when the video has fewer frames than it could use) generates real in-between frames
@@ -46,23 +56,41 @@ open /Applications/AerialSwap.app
    macOS downloads the model once (a few seconds). The model output is ~3% darker, so each frame is
    brightness-matched to the original. A noise filter (`VTTemporalNoiseFilter`) was tested too and gave no
    measurable improvement on compressed web videos, so it isn't used.
-4. **Set as Wallpaper…** asks once, then transcodes (with a time estimate) and installs: Apple's original
-   is backed up once, the file is swapped atomically, `WallpaperAgent` is restarted and temp files are deleted.
-5. Make sure the target Aerial is selected as your wallpaper in System Settings → Wallpaper.
+4. **Set as Wallpaper** asks once, then transcodes (progress ring with a time estimate) and installs: Apple's
+   original is backed up once, the file is swapped atomically, `WallpaperAgent` is restarted and temp files are
+   deleted. **Only save to library** prepares the video without touching any Aerial.
+5. Make sure the target Aerial is selected as your wallpaper in System Settings → Wallpaper (the success
+   dialog links there).
 
-**Your wallpapers:** every wallpaper you set is kept in a library (shown when no new video is loaded).
-Click one and **Set as Wallpaper** to switch back to it in seconds, without the original file and
-without converting again. Right-click or hover to delete one; the wallpaper on screen is not affected.
+**Library:** every wallpaper you prepare is kept there. Pick one to preview it full size, then **Use on …** to
+switch to it in seconds, without the original file and without converting again. Right-click to delete one;
+the wallpaper on screen is not affected. Search filters by name.
 
-**Restore original** puts Apple's file back. Each row shows whether the asset is *Original*,
-*Replaced*, or *Was replaced, but macOS has since reset the file*. In the last case **Reinstall**
-puts your video back with one click (AerialSwap keeps a copy of every installed video for this).
+**Discover:** free videos from [Pixabay](https://pixabay.com/). Pick a topic (Featured, From Above, Mountains, …)
+or search, then pick a video to preview it full size (a smaller version, at least 1280 px wide, is streamed). **Use This Video** downloads
+the 4K version (1080p when Pixabay has no 4K) into the temp folder and opens it like a video you added: trim, pick
+the Aerial, set it. The library keeps the credit ("<user> on Pixabay"); right-click → **View on Pixabay**.
+Only real footage (`video_type=film`) of at least 1920 px width is listed, with SafeSearch on.
+
+Discover needs a Pixabay API key (free at [pixabay.com/api/docs](https://pixabay.com/api/docs/)). AerialSwap uses the
+first of:
+
+```sh
+defaults write local.aerialswap PixabayKey <key>   # per user
+PIXABAY_KEY=<key>                                  # environment
+echo <key> > Resources/pixabay.key                 # bundled by build.sh into the app (git-ignored)
+```
+
+Pixabay's API terms ask for results to be cached for 24 hours: every search response is kept in
+`~/Library/Caches/AerialSwap/discover/` and reused for a day (older ones are deleted on launch, and shown only
+when Pixabay can't be reached). The limit is 100 requests per minute per key.
 
 Headless helpers (never touch the aerials folder):
 
 ```sh
 AerialSwap.app/Contents/MacOS/AerialSwap --list
 AerialSwap.app/Contents/MacOS/AerialSwap --transcode in.mp4 out.mov [--fps auto|60|120|240] [--start 0] [--end 30] [--loop 1] [--freeze 60]
+AerialSwap.app/Contents/MacOS/AerialSwap --snapshot outDir [TestFootage]   # renders every screen to PNGs with sample data
 ```
 
 ## How it works (findings from macOS 27.0.1)
@@ -106,6 +134,7 @@ frame (e.g. 60–120 s): any unlock during the hold leaves that frame on the des
 | `~/Library/Application Support/AerialSwap/installed/<id>.mov` | Copy of your installed video, for **Reinstall** (deleted on restore) |
 | `~/Library/Application Support/AerialSwap/state.json` | What was installed where |
 | `~/Library/Logs/AerialSwap.log` | Log |
+| `~/Library/Caches/AerialSwap/discover/` | Pixabay search results, kept 24 h |
 
 AerialSwap only writes `videos/<id>.mov` of the selected asset (via a temp file `.<id>.aerialswap-tmp`
 in the same folder) and its own folders. It never touches `entries.json`, `manifest.tar`,

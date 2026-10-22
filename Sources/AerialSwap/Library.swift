@@ -13,6 +13,9 @@ struct LibraryItem: Codable, Identifiable, Hashable, Sendable {
     var motion: String? = nil       // "Smooth" / "Maximum" when frames were interpolated
     var enhanced: Bool? = nil
     var smoothLoop: Bool? = nil
+    // Where it came from, for videos downloaded in Discover: "<user> on Pixabay" and the video's Pixabay page.
+    var credit: String? = nil
+    var sourcePage: String? = nil
 
     /// Short labels for the library card, e.g. "60 fps · Smooth · Loop" (Enhanced is a badge on the thumbnail).
     var settingsSummary: String? {
@@ -30,6 +33,8 @@ struct LibrarySettings: Sendable {
     var motion: String?
     var enhanced: Bool
     var smoothLoop: Bool
+    var credit: String? = nil
+    var sourcePage: String? = nil
 }
 
 /// Finished wallpapers in ~/Library/Application Support/AerialSwap/library: <id>.mov, <id>.jpg, library.json.
@@ -67,7 +72,7 @@ struct WallpaperLibrary: Sendable {
         let bytes = ((try? fm.attributesOfItem(atPath: destination.path))?[.size] as? NSNumber)?.int64Value ?? 0
         let item = LibraryItem(id: id, name: name, addedAt: .now, duration: duration, bytes: bytes,
                                fps: settings?.fps, motion: settings?.motion, enhanced: settings?.enhanced,
-                               smoothLoop: settings?.smoothLoop)
+                               smoothLoop: settings?.smoothLoop, credit: settings?.credit, sourcePage: settings?.sourcePage)
         if let frame = await Self.middleFrame(of: destination),
            let jpeg = NSBitmapImageRep(cgImage: frame).representation(using: .jpeg, properties: [.compressionFactor: 0.8]) {
             try? jpeg.write(to: thumbnailURL(item))
@@ -97,12 +102,12 @@ struct WallpaperLibrary: Sendable {
         try encoder.encode(items).write(to: indexURL, options: .atomic)
     }
 
-    /// A frame from the middle of a video, used for thumbnails.
-    static func middleFrame(of url: URL) async -> CGImage? {
+    /// A frame from the middle of a video, used for thumbnails (and, larger, for full-window backgrounds).
+    static func middleFrame(of url: URL, maxSize: CGSize = CGSize(width: 480, height: 270)) async -> CGImage? {
         let asset = AVURLAsset(url: url)
         guard let duration = try? await asset.load(.duration) else { return nil }
         let generator = AVAssetImageGenerator(asset: asset)
-        generator.maximumSize = CGSize(width: 480, height: 270)
+        generator.maximumSize = maxSize
         generator.appliesPreferredTrackTransform = true
         let time = CMTime(seconds: duration.seconds / 2, preferredTimescale: 600)
         return try? await generator.image(at: time).image

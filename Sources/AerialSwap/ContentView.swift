@@ -3,35 +3,46 @@ import AVKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Switches between the full-window screens and shows the dialogs on top.
 struct ContentView: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            VStack(alignment: .leading, spacing: 26) {
-                sourceSection
-                targetSection
-            }
-            .padding(.horizontal, 28)
-            .padding(.bottom, 24)
-            .disabled(model.isBusy)
-            bottomBar
+        ZStack {
+            screen
+            overlays
         }
-        .frame(width: 780)
-        .fixedSize(horizontal: false, vertical: true)
-        .containerBackground(.regularMaterial, for: .window)
-        .overlay { if model.isDropTargeted { dropHighlight } }
+        .frame(minWidth: 960, minHeight: 640)
+        .background(Color.black)
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)   // the video fills the window behind the toolbar
+        .foregroundStyle(.white)
+        .environment(\.colorScheme, .dark)
+        .tint(Theme.accent)
         .dropDestination(for: URL.self) { urls, _ in
             guard let url = urls.first, !model.isBusy else { return false }
             model.loadSource(url)
             return true
         } isTargeted: { model.isDropTargeted = $0 }
-        .animation(.snappy(duration: 0.25), value: model.sourceInfo == nil)
-        .animation(.snappy(duration: 0.2), value: model.selectedID)
-        .animation(.snappy(duration: 0.2), value: model.notice)
-        .animation(.snappy(duration: 0.2), value: model.showsProgress)
-        .onAppear { model.refreshAssets() }
+        .animation(animation(.snappy(duration: 0.25)), value: model.screen)
+        .animation(animation(.snappy(duration: 0.2)), value: model.section)
+        .animation(animation(.snappy(duration: 0.2)), value: model.notice)
+        .animation(animation(.snappy(duration: 0.2)), value: model.done)
+        .animation(animation(.snappy(duration: 0.2)), value: model.roleMove)
+        .onAppear {
+            model.refreshAssets()
+            // Debug: `AerialSwap.app/Contents/MacOS/AerialSwap --open <video>` starts on the Configure screen.
+            let args = CommandLine.arguments
+            if !model.isSnapshot, let i = args.firstIndex(of: "--open"), i + 1 < args.count {
+                model.showIntro = false
+                model.loadSource(URL(fileURLWithPath: args[i + 1]))
+            }
+        }
+        .task(id: model.notice) {
+            // Confirmations go away by themselves; errors stay until dismissed.
+            guard let notice = model.notice, notice.kind != .error else { return }
+            try? await Task.sleep(for: .seconds(6))
+            if model.notice == notice { model.notice = nil }
+        }
         .fileImporter(isPresented: $model.showImporter, allowedContentTypes: [.movie, .video, .audiovisualContent]) { result in
             if case .success(let url) = result { model.loadSource(url) }
         }
@@ -40,24 +51,18 @@ struct ContentView: View {
         } message: {
             Text(confirmText)
         }
-        .alert("Low-resolution video", isPresented: $model.showResolutionAlert) {
-            Button("Choose Another Video…") { model.showImporter = true }
-            Button("Continue Anyway", role: .cancel) {}
-        } message: {
-            Text(model.resolutionHint?.text ?? "")
-        }
         .confirmationDialog("Restore Apple's original?", isPresented: restoreBinding) {
             Button("Restore Original") { if let a = model.restoreCandidate { model.restore(a) } }
         } message: {
-            Text("“\(model.restoreCandidate?.name ?? "")” will play Apple's video again.")
+            Text("“\(model.restoreCandidate?.name ?? "")” will play Apple's video again. Your video stays in the library.")
         }
         .confirmationDialog("Delete from your library?", isPresented: deleteBinding) {
             Button("Delete", role: .destructive) { if let item = model.deleteCandidate { model.deleteLibraryItem(item) } }
         } message: {
-            Text("“\(model.deleteCandidate?.name ?? "")” will be removed from your library. "
+            Text("“\(prettyName(model.deleteCandidate?.name ?? ""))” will be removed from your library. "
                  + "The wallpaper currently on your screen is not affected.")
         }
-        .alert("Convert this video?", isPresented: conversionBinding) {
+        .alert("Convert this video first?", isPresented: conversionBinding) {
             Button("Convert with ffmpeg") { model.convertPending() }
             Button("Cancel", role: .cancel) { model.pendingConversion = nil }
         } message: {
@@ -65,10 +70,46 @@ struct ContentView: View {
         }
     }
 
+    /// No animations in --snapshot renders: ImageRenderer would capture screens halfway through their transition.
+    private func animation(_ animation: Animation) -> Animation? { model.isSnapshot ? nil : animation }
+
+    @ViewBuilder private var screen: some View {
+        switch model.screen {
+        case .intro: IntroView(model: model)
+        case .home: HomeView(model: model)
+        case .configure: ConfigureView(model: model)
+        case .working: WorkingView(model: model)
+        }
+    }
+
+    @ViewBuilder private var overlays: some View {
+        if model.screen == .home, model.done == nil, model.roleMove == nil, let asset = model.resetAlertAsset, !model.isBusy {
+            ResetDialog(model: model, asset: asset)
+        }
+        if model.screen == .configure, model.showResolutionAlert, let hint = model.resolutionHint {
+            LowResolutionDialog(model: model, text: hint.text)
+        }
+        if model.screen == .home, let move = model.roleMove {
+            RoleMoveDialog(model: model, move: move)
+        }
+        if model.screen == .home, let done = model.done {
+            SuccessDialog(model: model, done: done)
+        }
+        if model.workFlow == .quick {
+            QuickBusyOverlay(phase: model.phase)
+        }
+        if let notice = model.notice, model.screen != .working {
+            NoticeToast(notice: notice) { model.notice = nil }
+        }
+        if model.isDropTargeted {
+            DropHighlight()
+        }
+    }
+
     private var confirmText: String {
         let target = model.selectedAsset?.name ?? ""
         if model.isUsingLibrary, let item = model.selectedLibraryItem {
-            return "“\(target)” will play “\(item.name)” from your library. It's already prepared, "
+            return "“\(target)” will play “\(prettyName(item.name))” from your library. It's already prepared, "
                 + "so this only takes a few seconds."
         }
         let video = model.displayName ?? ""
@@ -89,791 +130,116 @@ struct ContentView: View {
     private var conversionBinding: Binding<Bool> {
         Binding(get: { model.pendingConversion != nil }, set: { if !$0 { model.pendingConversion = nil } })
     }
+}
 
-    // MARK: - Header
+// MARK: - Shared chrome
 
-    private var header: some View {
-        HStack(spacing: 14) {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .frame(width: 46, height: 46)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("AerialSwap").font(.title2.weight(.bold))
-                Text("Turn any video into a native macOS Aerial wallpaper.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
+/// Now Playing | Library | Discover, centered in the top bar.
+struct SectionSwitcher: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        PillPicker(options: [.init(value: HomeSection.nowPlaying, title: "Now Playing"), .init(value: .library, title: "Library"),
+                             .init(value: .discover, title: "Discover")],
+                   selection: Binding(get: { model.section },
+                                      set: { if $0 == .discover { model.openDiscover() } else { model.section = $0 } }),
+                   label: "Section")
+            .glassCapsule(opacity: 0.45)
+            .disabled(model.isBusy)
+    }
+}
+
+/// Add Video + the Settings menu, on the right of the top bar.
+struct TopBarActions: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        Button { model.showImporter = true } label: {
+            Label("Add Video", systemImage: "plus").labelStyle(.titleAndIcon)
         }
-        .padding(.horizontal, 28)
-        .padding(.top, 38)      // room for the traffic lights (hidden title bar)
-        .padding(.bottom, 22)
-    }
+        .buttonStyle(PillButtonStyle(kind: .primary, height: 32))
+        .keyboardShortcut("o")
+        .disabled(model.isBusy)
 
-    // MARK: - Video
-
-    private var sourceSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionTitle("Video")
-            if let info = model.sourceInfo {
-                loadedSource(info)
-            } else {
-                emptySource
-            }
-        }
-    }
-
-    @ViewBuilder private var emptySource: some View {
-        if model.libraryItems.isEmpty {
-            dropZone
-        } else {
-            VStack(alignment: .leading, spacing: 18) {
-                compactDropZone
-                librarySection
-            }
-        }
-    }
-
-    private var dropZone: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "film.stack")
-                .font(.system(size: 34, weight: .light))
-                .foregroundStyle(.secondary)
-                .padding(.bottom, 4)
-            Text(model.sourceURL == nil ? "Drop a video here" : "Loading…")
-                .font(.title3.weight(.semibold))
-            Text("Any length works. MP4 and MOV are used directly; MKV, WebM and others are converted with ffmpeg.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 380)
-            Button("Choose Video…") { model.showImporter = true }
-                .controlSize(.large)
-                .keyboardShortcut("o")
-                .padding(.top, 6)
-        }
-        .frame(maxWidth: .infinity)
-        .frame(height: 236)
-        .background(dropZoneBackground)
-    }
-
-    private var compactDropZone: some View {
-        HStack(spacing: 14) {
-            Image(systemName: "film.stack")
-                .font(.system(size: 26, weight: .light))
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(model.sourceURL == nil ? "Drop a new video here" : "Loading…").font(.headline)
-                Text("MP4 and MOV are used directly; other formats are converted with ffmpeg.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button("Choose Video…") { model.showImporter = true }
-                .keyboardShortcut("o")
-        }
-        .padding(.horizontal, 20)
-        .frame(height: 84)
-        .background(dropZoneBackground)
-    }
-
-    private var dropZoneBackground: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 14).fill(.quaternary.opacity(0.5))
-            RoundedRectangle(cornerRadius: 14).strokeBorder(.tertiary, style: StrokeStyle(lineWidth: 1.5, dash: [7, 5]))
-        }
-    }
-
-    /// "0:15.0 · 27.5 MB · 16 Oct" (length, size, date saved).
-    private func libraryDetails(_ item: LibraryItem) -> String {
-        let date = item.addedAt.formatted(.dateTime.day().month(.abbreviated))
-        return "\(clock(item.duration)) · \(item.bytes.formatted(.byteCount(style: .file))) · \(date)"
-    }
-
-    private var librarySection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                SectionTitle("Your wallpapers")
-                Spacer()
-                Text("\(model.libraryItems.count) saved · \(model.libraryBytes.formatted(.byteCount(style: .file)))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            ScrollView(.horizontal) {
-                HStack(spacing: 14) {
-                    ForEach(model.libraryItems) { item in
-                        LibraryCard(item: item,
-                                    image: model.libraryThumbnails[item.id],
-                                    details: libraryDetails(item),
-                                    settings: item.settingsSummary,
-                                    playingOn: model.playingAerials(for: item),
-                                    isSelected: model.selectedLibraryID == item.id,
-                                    isHovered: model.hoveredLibraryID == item.id,
-                                    onDelete: { model.deleteCandidate = item })
-                            .onTapGesture { model.selectLibraryItem(item) }
-                            .onHover { model.hoveredLibraryID = $0 ? item.id : nil }
-                            .contextMenu {
-                                Button("Delete from Library…", role: .destructive) { model.deleteCandidate = item }
-                            }
-                    }
-                }
-                .padding(4)
-            }
-            .scrollIndicators(.never)
-        }
-    }
-
-    private func loadedSource(_ info: SourceInfo) -> some View {
-        HStack(alignment: .top, spacing: 22) {
-            preview
-            details(info)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .frame(minHeight: 245, alignment: .top)
-        }
-    }
-
-    private var preview: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ZStack {
-                Color.black
-                if let player = model.player {
-                    PlayerView(player: player, model: model)
-                }
-            }
-            .frame(width: 400, height: 225)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.08)))
-            .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
-            Text("Preview shows the 16:9 crop your screen will get.")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-        }
-    }
-
-    private func details(_ info: SourceInfo) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(model.displayName ?? "")
-                    .font(.headline)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .help(model.displayName ?? "")
-                Spacer(minLength: 8)
-                Button { model.clearSource() } label: {
-                    Image(systemName: "xmark.circle.fill").font(.title3).foregroundStyle(.tertiary)
-                }
-                .buttonStyle(.plain)
-                .help("Remove this video")
-            }
-
-            FlowChips(chips: chips(for: info))
-
-            if let hint = model.resolutionHint {
-                Label(hint.text, systemImage: hint.severe ? "exclamationmark.triangle.fill" : "info.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(hint.severe ? Color.orange : Color.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(8)
-                    .background(RoundedRectangle(cornerRadius: 8)
-                        .fill((hint.severe ? Color.orange : Color.blue).opacity(0.12)))
-            }
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 4) {
-                FieldLabel("Clip")
-                Text(clipText(info)).font(.callout).monospacedDigit()
-                HStack(spacing: 8) {
-                    Button { model.beginTrim() } label: { Label("Trim…", systemImage: "timeline.selection") }
-                        .disabled(model.player == nil)
-                    if model.isTrimmed {
-                        Button("Use Whole Video") { model.resetTrim() }
-                    }
-                }
-                .controlSize(.small)
-                .padding(.top, 2)
-                Toggle("Smooth loop", isOn: $model.smoothLoop)
-                    .toggleStyle(.checkbox)
-                    .font(.callout)
-                    .disabled(!model.canSmoothLoop)
-                    .help("The lock screen loops your clip. This crossfades its last second into the first, "
-                          + "so the loop has no visible cut. Needs a clip of at least 3 seconds.")
-                    .padding(.top, 4)
-                if !model.availableMotionModes.isEmpty {
-                    // A compact drop-down: a segmented control with these labels is wider than the column.
-                    HStack(spacing: 6) {
-                        Text("Motion").font(.callout)
-                        Picker("Motion", selection: $model.motionMode) {
-                            ForEach(model.availableMotionModes) { Text($0.label).tag($0) }
-                        }
-                        .pickerStyle(.menu)
-                        .labelsHidden()
-                        .fixedSize()
-                    }
-                    .controlSize(.small)
-                    .help("Smooth and Maximum generate real in-between frames, so motion and the slow-down after "
-                          + "unlocking stay fluid. Maximum doubles the frames again (120 fps) and takes about twice as long.")
-                }
-                if model.canEnhance {
-                    Toggle("Enhance detail (experimental)", isOn: $model.enhanceDetail)
-                        .toggleStyle(.checkbox)
-                        .font(.callout)
-                        .help("Uses Apple's on-device ML upscaler for videos up to 1080p instead of normal scaling. "
-                              + "Takes about 30-40x the clip length and downloads a model once. Results vary.")
-                    if model.enhanceDetail {
-                        Label(model.enhanceWarning, systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .transition(.opacity)
-                    }
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                FieldLabel("Becomes")
-                Text(outputText(info))
-                    .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)   // wrap instead of truncating
-            }
-
-            Spacer(minLength: 0)
-            Button("Choose Another Video…") { model.showImporter = true }
-                .buttonStyle(.link)
-                .font(.callout)
-                .keyboardShortcut("o")
-        }
-    }
-
-    private func chips(for info: SourceInfo) -> [Chip] {
-        let fps = info.fps.formatted(.number.precision(.fractionLength(0...2)))
-        var chips = [
-            Chip(icon: "clock", text: clock(info.duration)),
-            Chip(icon: "rectangle.dashed", text: "\(info.width)×\(info.height)"),
-            Chip(icon: "film", text: "\(fps) fps"),
-        ]
-        if let hdr = info.hdr { chips.append(Chip(icon: "sun.max.fill", text: hdr, tint: .orange)) }
-        return chips
-    }
-
-    private func clipText(_ info: SourceInfo) -> String {
-        guard model.isTrimmed else { return "Whole video · \(clock(info.duration))" }
-        let length = clock(model.trimEnd - model.trimStart)
-        return "\(clock(model.trimStart)) – \(clock(model.trimEnd))  ·  \(length)"
-    }
-
-    private func outputText(_ info: SourceInfo) -> String {
-        let loop = model.smoothLoop && model.canSmoothLoop ? " · seamless loop" : ""
-        let fps = model.interpolates
-            ? "\(model.outputFPS) fps, smoothed from \(Int(info.fps.rounded()))" : "\(model.outputFPS) fps"
-        let enhanced = model.enhances ? " · enhanced detail" : ""
-        let base = "4K HEVC · \(fps) · no sound" + enhanced + loop
-        return info.hdr == nil ? base : base + " · converted to SDR"
-    }
-
-    // MARK: - Target
-
-    private var targetSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
-                SectionTitle("Wallpaper to replace")
-                Spacer()
-                if !model.selectionNote.isEmpty {
-                    Text(model.selectionNote).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            if model.assets.isEmpty {
-                Text("No downloaded Aerials found. Pick any Aerial in System Settings → Wallpaper first, then come back.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 80)
-            } else {
-                cards
-                if let asset = model.selectedAsset {
-                    selectedAssetActions(asset)
-                }
-            }
-        }
-    }
-
-    private var cards: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 16) {
-                ForEach(model.assets) { asset in
-                    AerialCard(asset: asset,
-                               image: model.thumbnails[asset.id],
-                               status: model.statuses[asset.id] ?? .original,
-                               isSelected: model.selectedID == asset.id,
-                               isHovered: model.hoveredAssetID == asset.id)
-                        .onTapGesture { model.select(asset) }
-                        .onHover { model.hoveredAssetID = $0 ? asset.id : nil }
-                }
-            }
-            .padding(4)     // room for the selection ring and shadow
-        }
-        .scrollIndicators(.never)
-    }
-
-    private func selectedAssetActions(_ asset: AerialAsset) -> some View {
-        HStack(spacing: 10) {
-            switch model.statuses[asset.id] ?? .original {
-            case .original:
-                Image(systemName: "lock.shield").foregroundStyle(.secondary)
-                Text("Apple's original is backed up automatically before it's replaced.")
-                    .foregroundStyle(.secondary)
-                Spacer()
-            case .replaced(let name, let date, let protected):
-                Image(systemName: "checkmark.seal.fill").foregroundStyle(.green)
-                Text(playingText(name: name, date: date, protected: protected))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer()
-                Button("Restore Apple's Original") { model.restoreCandidate = asset }
-            case .resetByMacOS:
-                Image(systemName: "exclamationmark.arrow.circlepath").foregroundStyle(.orange)
-                Text("macOS put Apple's video back, e.g. after an update.")
-                Spacer()
-                if model.store.canReinstall(asset) {
-                    Button("Reinstall My Video") { model.reinstall(asset) }
-                        .buttonStyle(.borderedProminent)
-                }
-                if model.store.hasBackup(asset) {
-                    Button("Keep Apple's") { model.restoreCandidate = asset }
-                }
-            }
-        }
-        .font(.callout)
-        .controlSize(.small)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 9)
-        .background(RoundedRectangle(cornerRadius: 10).fill(.quaternary.opacity(0.6)))
-    }
-
-    private func playingText(name: String, date: Date, protected: Bool) -> String {
-        let when = date.formatted(date: .abbreviated, time: .shortened)
-        return "Playing “\(name)” since \(when)" + (protected ? " · protected" : "")
-    }
-
-    // MARK: - Bottom bar
-
-    private var bottomBar: some View {
-        HStack(spacing: 14) {
-            statusArea
-            if !model.showsProgress {
-                moreMenu
-                Button { model.confirmSetWallpaper = true } label: {
-                    Label("Set as Wallpaper", systemImage: "sparkles").padding(.horizontal, 6)
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .keyboardShortcut(.defaultAction)
-                .disabled(!model.canSetWallpaper)
-            }
-        }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 14)
-        .frame(minHeight: 66)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
-    }
-
-    @ViewBuilder private var statusArea: some View {
-        if model.showsProgress {
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(model.phase).font(.callout.weight(.medium)).lineLimit(1)
-                    Spacer()
-                    // Re-render once per second so the estimate stays current.
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        Text("\(Int(model.progress * 100)) %  ·  \(model.remainingText)")
-                            .font(.callout)
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                ProgressView(value: model.progress)
-            }
-            Button("Cancel") { model.cancel() }
-        } else if model.isBusy {
-            ProgressView().controlSize(.small)
-            Text("\(model.phase)…").font(.callout)
-            Spacer()
-        } else if let notice = model.notice {
-            NoticeView(notice: notice) { model.notice = nil }
-            Spacer(minLength: 8)
-        } else {
-            Text(hint).font(.callout).foregroundStyle(.secondary)
-            Spacer()
-        }
-    }
-
-    private var moreMenu: some View {
         Menu {
             Button("Show Library in Finder") { model.revealLibrary() }
             Button("Show Backups in Finder") { model.revealBackups() }
             Button("Open Log") { model.openLog() }
+            Divider()
+            Button("Show Welcome Screen") { model.showIntroAgain() }
         } label: {
-            Image(systemName: "ellipsis.circle").font(.title3)
+            Image(systemName: "gearshape")
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
         .menuIndicator(.hidden)
+        .buttonStyle(RoundGlassButtonStyle())
         .fixedSize()
-        .help("More options")
-        .disabled(model.isBusy)
-    }
-
-    private var hint: String {
-        guard let asset = model.selectedAsset else { return "Pick the wallpaper to replace." }
-        if model.isUsingLibrary, let item = model.selectedLibraryItem {
-            return "Ready: “\(item.name)” will replace “\(asset.name)”. No conversion needed."
-        }
-        if model.sourceInfo == nil {
-            return model.libraryItems.isEmpty ? "Add a video to get started."
-                : "Add a new video, or pick one of your saved wallpapers."
-        }
-        return "Ready: your video will replace “\(asset.name)”."
-    }
-
-    private var dropHighlight: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 16).fill(Color.accentColor.opacity(0.08))
-            RoundedRectangle(cornerRadius: 16).strokeBorder(Color.accentColor, lineWidth: 3)
-            Label("Drop to use this video", systemImage: "arrow.down.circle.fill")
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
-                .padding(.horizontal, 18)
-                .padding(.vertical, 10)
-                .background(Capsule().fill(.regularMaterial))
-        }
-        .padding(8)
-        .allowsHitTesting(false)
-    }
-
-    /// 1:05.3 style for short times, 12:05 for long ones.
-    private func clock(_ seconds: Double) -> String {
-        let s = max(0, seconds)
-        let minutes = Int(s) / 60
-        if minutes >= 10 { return String(format: "%d:%02d", minutes, Int(s) % 60) }
-        return String(format: "%d:%04.1f", minutes, s.truncatingRemainder(dividingBy: 60))
+        .help("More")
+        .accessibilityLabel("More")
     }
 }
 
-// MARK: - Components
-
-private struct SectionTitle: View {
-    let text: String
-    init(_ text: String) { self.text = text }
+/// The video's name in a capsule, centered in the top bar while configuring or working.
+struct TitleCapsule: View {
+    let title: String
+    var detail: String?
+    var detailColor = Theme.secondary
 
     var body: some View {
-        Text(text.uppercased())
-            .font(.caption.weight(.semibold))
-            .tracking(0.6)
-            .foregroundStyle(.secondary)
+        HStack(spacing: 10) {
+            Text(title).font(.system(size: 13, weight: .semibold)).lineLimit(1).truncationMode(.middle)
+            if let detail { Text(detail).font(.system(size: 13)).foregroundStyle(detailColor).lineLimit(1) }
+        }
+        .padding(.horizontal, 14)
+        .frame(height: 30)
+        .glassCapsule()
+        .frame(maxWidth: 520)
     }
 }
 
-private struct FieldLabel: View {
-    let text: String
-    init(_ text: String) { self.text = text }
-
-    var body: some View {
-        Text(text).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-    }
-}
-
-private struct Chip: Hashable {
-    var icon: String
-    var text: String
-    var tint: Color? = nil
-}
-
-private struct FlowChips: View {
-    let chips: [Chip]
-
-    var body: some View {
-        FlowLayout(spacing: 6) {
-            ForEach(chips, id: \.self) { chip in
-                HStack(spacing: 4) {
-                    Image(systemName: chip.icon).imageScale(.small)
-                    Text(chip.text)
-                }
-                .font(.caption.weight(.medium))
-                .foregroundStyle(chip.tint ?? .primary)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(Capsule().fill(chip.tint?.opacity(0.15) ?? Color.secondary.opacity(0.14)))
-                .fixedSize()
-            }
-        }
-    }
-}
-
-/// Lays out children left to right and wraps to a new row when the width runs out.
-private struct FlowLayout: Layout {
-    var spacing: CGFloat
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = arrange(subviews, maxWidth: proposal.width ?? .infinity)
-        let width = rows.map { $0.width }.max() ?? 0
-        let height = rows.map { $0.height }.reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1))
-        return CGSize(width: width, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var y = bounds.minY
-        for row in arrange(subviews, maxWidth: bounds.width) {
-            var x = bounds.minX
-            for index in row.indices {
-                let size = subviews[index].sizeThatFits(.unspecified)
-                subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2), proposal: .unspecified)
-                x += size.width + spacing
-            }
-            y += row.height + spacing
-        }
-    }
-
-    private struct Row { var indices: [Int] = []; var width: CGFloat = 0; var height: CGFloat = 0 }
-
-    private func arrange(_ subviews: Subviews, maxWidth: CGFloat) -> [Row] {
-        var rows = [Row()]
-        for index in subviews.indices {
-            let size = subviews[index].sizeThatFits(.unspecified)
-            let needed = rows[rows.count - 1].indices.isEmpty ? size.width : rows[rows.count - 1].width + spacing + size.width
-            if needed > maxWidth && !rows[rows.count - 1].indices.isEmpty {
-                rows.append(Row())
-            }
-            var row = rows[rows.count - 1]
-            row.width = row.indices.isEmpty ? size.width : row.width + spacing + size.width
-            row.height = max(row.height, size.height)
-            row.indices.append(index)
-            rows[rows.count - 1] = row
-        }
-        return rows
-    }
-}
-
-private struct AerialCard: View {
-    let asset: AerialAsset
-    let image: NSImage?
-    let status: AerialStatus
-    let isSelected: Bool
-    let isHovered: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            thumbnail
-            VStack(alignment: .leading, spacing: 1) {
-                Text(asset.name).font(.callout.weight(.semibold))
-                Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-            }
-            .padding(.horizontal, 2)
-        }
-        .frame(width: 200)
-        .contentShape(Rectangle())
-        .help(asset.name)
-    }
-
-    private var thumbnail: some View {
-        ZStack(alignment: .topLeading) {
-            Group {
-                if let image {
-                    Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-                } else {
-                    LinearGradient(colors: [.indigo.opacity(0.5), .teal.opacity(0.4)], startPoint: .top, endPoint: .bottom)
-                }
-            }
-            .frame(width: 200, height: 112)
-            .clipped()
-            badge.padding(7)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(ringColor, lineWidth: isSelected ? 3 : 1)
-        }
-        .overlay(alignment: .topTrailing) {
-            if isSelected {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.title3)
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, Color.accentColor)
-                    .padding(7)
-                    .transition(.scale.combined(with: .opacity))
-            }
-        }
-        .shadow(color: .black.opacity(isSelected ? 0.3 : 0.15), radius: isSelected ? 8 : 4, y: 3)
-        .scaleEffect(isHovered && !isSelected ? 1.02 : 1)
-        .animation(.snappy(duration: 0.15), value: isHovered)
-    }
-
-    private var ringColor: Color {
-        if isSelected { return .accentColor }
-        return .white.opacity(isHovered ? 0.35 : 0.1)
-    }
-
-    @ViewBuilder private var badge: some View {
-        switch status {
-        case .original: EmptyView()
-        case .replaced: Badge(text: "Your video", color: .green)
-        case .resetByMacOS: Badge(text: "Reset by macOS", color: .orange)
-        }
-    }
-
-    private var subtitle: String {
-        switch status {
-        case .original: "Apple original"
-        case .replaced(let name, _, _): name
-        case .resetByMacOS: "Apple's video is back"
-        }
-    }
-}
-
-private struct LibraryCard: View {
-    let item: LibraryItem
-    let image: NSImage?
-    let details: String
-    let settings: String?
-    let playingOn: [String]
-    let isSelected: Bool
-    let isHovered: Bool
-    let onDelete: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ZStack(alignment: .topLeading) {
-                Group {
-                    if let image {
-                        Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-                    } else {
-                        LinearGradient(colors: [.indigo.opacity(0.5), .teal.opacity(0.4)], startPoint: .top, endPoint: .bottom)
-                    }
-                }
-                .frame(width: 160, height: 90)
-                .clipped()
-                if !playingOn.isEmpty {
-                    Badge(text: "On \(playingOn.joined(separator: ", "))", color: .green).padding(6)
-                }
-            }
-            .overlay(alignment: .bottomLeading) {
-                if item.enhanced == true { Badge(text: "✦ Enhanced", color: .purple).padding(6) }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(isSelected ? Color.accentColor : .white.opacity(isHovered ? 0.35 : 0.1),
-                                  lineWidth: isSelected ? 3 : 1)
-            }
-            .overlay(alignment: .topTrailing) { cornerControl.padding(6) }
-            .shadow(color: .black.opacity(isSelected ? 0.3 : 0.15), radius: isSelected ? 7 : 3, y: 2)
-            .scaleEffect(isHovered && !isSelected ? 1.02 : 1)
-            .animation(.snappy(duration: 0.15), value: isHovered)
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(item.name).font(.caption.weight(.semibold)).lineLimit(1).truncationMode(.middle)
-                Text(details).font(.caption2).foregroundStyle(.secondary).monospacedDigit()
-                if let settings {
-                    Text(settings).font(.caption2.weight(.medium)).foregroundStyle(.tertiary).lineLimit(1)
-                }
-            }
-            .padding(.horizontal, 2)
-        }
-        .frame(width: 160)
-        .contentShape(Rectangle())
-        .help("\(item.name)\nSaved \(item.addedAt.formatted(date: .abbreviated, time: .shortened))"
-              + (settings.map { "\n\($0)" } ?? "") + (item.enhanced == true ? " · Enhanced detail" : ""))
-    }
-
-    @ViewBuilder private var cornerControl: some View {
-        if isSelected {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.title3)
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.white, Color.accentColor)
-        } else if isHovered {
-            Button(action: onDelete) {
-                Image(systemName: "trash.circle.fill")
-                    .font(.title3)
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, .black.opacity(0.55))
-            }
-            .buttonStyle(.plain)
-            .help("Delete from library")
-        }
-    }
-}
-
-private struct Badge: View {
-    let text: String
-    let color: Color
-
-    var body: some View {
-        Text(text)
-            .font(.caption2.weight(.bold))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(color.gradient))
-            .shadow(color: .black.opacity(0.25), radius: 2, y: 1)
-    }
-}
-
-private struct NoticeView: View {
-    let notice: Notice
-    let dismiss: () -> Void
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Image(systemName: icon).foregroundStyle(color)
-            Text(notice.text)
-                .font(.callout)
-                .lineLimit(3)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-            Button(action: dismiss) { Image(systemName: "xmark").font(.caption.weight(.bold)) }
-                .buttonStyle(.plain)
-                .foregroundStyle(.tertiary)
-                .help("Dismiss")
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(RoundedRectangle(cornerRadius: 9).fill(color.opacity(0.12)))
-        .transition(.move(edge: .bottom).combined(with: .opacity))
-    }
-
-    private var icon: String {
-        switch notice.kind {
-        case .info: "info.circle.fill"
-        case .success: "checkmark.circle.fill"
-        case .error: "exclamationmark.triangle.fill"
-        }
-    }
-
-    private var color: Color {
-        switch notice.kind {
-        case .info: .blue
-        case .success: .green
-        case .error: .red
-        }
-    }
-}
-
-/// AVKit's AppKit player view (needed for its built-in QuickTime-style trim bar).
+/// AVKit's player view, used full-window as the live lock-screen preview.
 struct PlayerView: NSViewRepresentable {
     let player: AVPlayer
-    let model: AppModel
+    /// Starts transparent and fades in once the first frame is ready, so the still frame below turns into the video.
+    var fadesIn = false
+
+    @MainActor final class Coordinator {
+        weak var view: AVPlayerView?
+        var readiness: NSKeyValueObservation?
+
+        func fadeInIfReady() {
+            guard let view, view.isReadyForDisplay, view.alphaValue < 1 else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.8
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                view.animator().alphaValue = 1
+            }
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> AVPlayerView {
         let view = AVPlayerView()
-        view.controlsStyle = .floating
+        view.controlsStyle = .none
         view.showsFullScreenToggleButton = false
-        view.videoGravity = .resizeAspectFill   // show the same 16:9 center crop the wallpaper gets
+        view.videoGravity = .resizeAspectFill   // the same 16:9 center crop the wallpaper gets
         view.player = player
-        model.playerView = view
+        context.coordinator.view = view
+        if fadesIn { watchReadiness(view, context.coordinator) }
         return view
     }
 
     func updateNSView(_ view: AVPlayerView, context: Context) {
-        if view.player !== player { view.player = player }
-        model.playerView = view
+        guard view.player !== player else { return }
+        view.player = player
+        if fadesIn { watchReadiness(view, context.coordinator) }
+    }
+
+    private func watchReadiness(_ view: AVPlayerView, _ coordinator: Coordinator) {
+        view.alphaValue = 0
+        coordinator.readiness = view.observe(\.isReadyForDisplay, options: [.initial]) { [weak coordinator] _, _ in
+            DispatchQueue.main.async { coordinator?.fadeInIfReady() }
+        }
     }
 }

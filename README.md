@@ -67,6 +67,24 @@ or **Keep Apple's**. **Restore Apple's Original…** puts Apple's file back.
 switch to it in seconds, without the original file and without converting again. Right-click to delete one;
 the wallpaper on screen is not affected. Search filters by name.
 
+**Add from URL** (**Add Video ⌄ → From URL…** or ⌘⇧O, or drag a link from the browser onto the window): paste a link to a video
+file, or a page on YouTube, Vimeo and [many other sites](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md).
+Video files are downloaded directly; pages need [yt-dlp](https://github.com/yt-dlp/yt-dlp) (`brew install yt-dlp`),
+which fetches the best video-only stream up to 4K (no sound, so nothing is merged). The download lands in the temp
+folder and opens like a video you added; YouTube's 4K streams are VP9 or AV1, so Macs without an AV1 decoder get the
+usual ffmpeg conversion offer. Only use videos you're allowed to use.
+Missing helpers can be installed from the dialog (**Install…**), and ffmpeg also when a video needs converting.
+AerialSwap asks first, then uses Homebrew if it's there (`brew install yt-dlp ffmpeg`; Homebrew's yt-dlp brings
+deno, which YouTube needs; outdated copies get upgraded). Without Homebrew it downloads the official `yt-dlp_macos`
+and deno builds from GitHub and a signed, notarized ffmpeg from [ffmpeg.martin-riedl.de](https://ffmpeg.martin-riedl.de)
+(there is no official macOS build) into `~/Library/Application Support/AerialSwap/tools/`, ~190 MB, checking each
+file against its publisher's SHA-256. That yt-dlp updates itself once a week; that ffmpeg gets macOS's certificate
+bundle (`SSL_CERT_FILE=/etc/ssl/cert.pem`), as its static OpenSSL has none.
+**Only download … to …** takes a start and/or end time (`1:30`, `90`, `1:02:03`) and fetches just that part, so a
+6 s clip of a 10-minute 4K video is ~5 MB instead of ~700 MB. It needs ffmpeg too (yt-dlp uses it to cut the stream
+without re-encoding; video files are cut at the nearest keyframe before the start), and shows a spinner instead of a
+percentage, as yt-dlp reports the part only when it's done.
+
 **Discover:** free videos from [Pixabay](https://pixabay.com/). Pick a topic (Featured, From Above, Mountains, …)
 or search, then pick a video to preview it full size (a smaller version, at least 1280 px wide, is streamed). **Use This Video** downloads
 the 4K version (1080p when Pixabay has no 4K) into the temp folder and opens it like a video you added: trim, pick
@@ -136,6 +154,7 @@ frame (e.g. 60–120 s): any unlock during the hold leaves that frame on the des
 | `~/Library/Application Support/AerialSwap/state.json` | What was installed where |
 | `~/Library/Logs/AerialSwap.log` | Log |
 | `~/Library/Caches/AerialSwap/discover/` | Pixabay search results, kept 24 h |
+| `~/Library/Application Support/AerialSwap/tools/` | yt-dlp, deno, ffmpeg when installed without Homebrew |
 
 AerialSwap only writes `videos/<id>.mov` of the selected asset (via a temp file `.<id>.aerialswap-tmp`
 in the same folder) and its own folders. It never touches `entries.json`, `manifest.tar`,

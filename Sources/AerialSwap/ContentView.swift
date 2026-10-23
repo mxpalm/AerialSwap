@@ -20,7 +20,7 @@ struct ContentView: View {
         .tint(Theme.accent)
         .dropDestination(for: URL.self) { urls, _ in
             guard let url = urls.first, !model.isBusy else { return false }
-            model.loadSource(url)
+            if url.isFileURL { model.loadSource(url) } else { model.importURL(url.absoluteString) }   // a link from a browser
             return true
         } isTargeted: { model.isDropTargeted = $0 }
         .animation(animation(.snappy(duration: 0.25)), value: model.screen)
@@ -28,6 +28,7 @@ struct ContentView: View {
         .animation(animation(.snappy(duration: 0.2)), value: model.notice)
         .animation(animation(.snappy(duration: 0.2)), value: model.done)
         .animation(animation(.snappy(duration: 0.2)), value: model.roleMove)
+        .animation(animation(.snappy(duration: 0.2)), value: model.showURLImport)
         .onAppear {
             model.refreshAssets()
             // Debug: `AerialSwap.app/Contents/MacOS/AerialSwap --open <video>` starts on the Configure screen.
@@ -62,6 +63,12 @@ struct ContentView: View {
             Text("“\(prettyName(model.deleteCandidate?.name ?? ""))” will be removed from your library. "
                  + "The wallpaper currently on your screen is not affected.")
         }
+        .alert("Install helpers?", isPresented: toolInstallBinding) {
+            Button("Install") { model.installTools() }
+            Button("Cancel", role: .cancel) { model.cancelToolInstall() }
+        } message: {
+            Text(model.toolInstallText)
+        }
         .alert("Convert this video first?", isPresented: conversionBinding) {
             Button("Convert with ffmpeg") { model.convertPending() }
             Button("Cancel", role: .cancel) { model.pendingConversion = nil }
@@ -95,6 +102,9 @@ struct ContentView: View {
         if model.screen == .home, let done = model.done {
             SuccessDialog(model: model, done: done)
         }
+        if model.screen == .home, model.showURLImport {
+            URLImportDialog(model: model)
+        }
         if model.workFlow == .quick {
             QuickBusyOverlay(phase: model.phase)
         }
@@ -127,6 +137,12 @@ struct ContentView: View {
         Binding(get: { model.deleteCandidate != nil }, set: { if !$0 { model.deleteCandidate = nil } })
     }
 
+    /// The buttons decide (Install / Cancel, which Esc triggers too), so dismissing alone changes nothing:
+    /// SwiftUI may clear the binding before it runs the button's action.
+    private var toolInstallBinding: Binding<Bool> {
+        Binding(get: { model.toolInstallRequest != nil }, set: { _ in })
+    }
+
     private var conversionBinding: Binding<Bool> {
         Binding(get: { model.pendingConversion != nil }, set: { if !$0 { model.pendingConversion = nil } })
     }
@@ -154,12 +170,7 @@ struct TopBarActions: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        Button { model.showImporter = true } label: {
-            Label("Add Video", systemImage: "plus").labelStyle(.titleAndIcon)
-        }
-        .buttonStyle(PillButtonStyle(kind: .primary, height: 32))
-        .keyboardShortcut("o")
-        .disabled(model.isBusy)
+        AddVideoMenu(model: model, kind: .primary, height: 32)
 
         Menu {
             Button("Show Library in Finder") { model.revealLibrary() }
@@ -176,6 +187,36 @@ struct TopBarActions: View {
         .fixedSize()
         .help("More")
         .accessibilityLabel("More")
+    }
+}
+
+/// "Add Video ⌄": a video file from this Mac, or a video from a web address. `before` runs first
+/// (e.g. selecting the Aerial the video is for). ⌘O and ⌘⇧O do the same from the File menu.
+struct AddVideoMenu: View {
+    @Bindable var model: AppModel
+    var title = "Add Video"
+    var kind = PillButtonStyle.Kind.primary
+    var height: CGFloat = 40
+    var fullWidth = false
+    var before: () -> Void = {}
+
+    var body: some View {
+        Menu {
+            Button("Video File…", systemImage: "folder") { before(); model.showImporter = true }
+            Button("From URL…", systemImage: "link") { before(); model.openURLImport() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "plus")
+                Text(title)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).opacity(0.8)
+            }
+        }
+        .menuStyle(.button)
+        .menuIndicator(.hidden)
+        .buttonStyle(PillButtonStyle(kind: kind, height: height, fullWidth: fullWidth))
+        .fixedSize(horizontal: !fullWidth, vertical: false)
+        .disabled(model.isBusy)
+        .help("Add a video file from this Mac, or a video from a web address")
     }
 }
 

@@ -31,7 +31,14 @@ enum Snapshot {
                 m.section = .discover
                 m.selectedDiscoverID = m.discoverVideos[2].id
             }),
-            ("04d-role-move", { m in
+            ("04d-url-import", { m in
+                m.section = .nowPlaying
+                m.urlImportText = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
+                m.urlImportStart = "1:30"; m.urlImportEnd = "1:45"
+                m.showURLImport = true
+            }),
+            ("04e-role-move", { m in
+                m.showURLImport = false
                 m.section = .nowPlaying
                 m.desktopID = "tahoe"; m.idleID = "tahoe"
                 m.roleMove = RoleMove(role: .screenSaver, fromID: "tahoe", choiceID: "sonoma")

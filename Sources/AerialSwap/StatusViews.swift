@@ -8,7 +8,8 @@ struct WorkingView: View {
 
     private var steps: [(WorkStep, String)] {
         switch model.workFlow {
-        case .download: [(.download, "Download from Pixabay")]
+        case .download: [(.download, "Download from \(model.downloadSource)")]
+        case .tools: [(.download, "Install from \(model.downloadSource)")]
         case .convert: [(.convert, "Convert with ffmpeg")]
         case .saveOnly: [(.prepare, "Prepare 4K"), (.save, "Save to library")]
         default: [(.prepare, "Prepare 4K"), (.save, "Save to library"), (.install, "Install")]
@@ -31,7 +32,7 @@ struct WorkingView: View {
                             .multilineTextAlignment(.center).frame(maxWidth: 520)
                     }
                     if steps.count > 1 { stepPills }
-                    if model.showsProgress {
+                    if model.showsProgress || model.workFlow == .download || model.workFlow == .tools {
                         Button("Cancel") { model.cancel() }
                             .buttonStyle(PillButtonStyle(kind: .secondary, height: 38))
                             .keyboardShortcut(.cancelAction)
@@ -42,7 +43,7 @@ struct WorkingView: View {
             }
         }
         .screenToolbar(snapshot: model.isSnapshot) {
-            if model.workFlow == .convert || model.workFlow == .download {
+            if model.workFlow == .convert || model.workFlow == .download || model.workFlow == .tools {
                 TitleCapsule(title: model.displayName ?? "")
             } else {
                 TitleCapsule(title: model.displayName ?? "",
@@ -68,7 +69,8 @@ struct WorkingView: View {
                     }
                 } else {
                     ProgressView().controlSize(.large)
-                    Text("Almost done").font(.system(size: 13)).foregroundStyle(Theme.secondary).padding(.top, 6)
+                    Text(model.workFlow == .tools ? "Installing" : model.workStep == .download ? "Downloading" : "Almost done")
+                        .font(.system(size: 13)).foregroundStyle(Theme.secondary).padding(.top, 6)
                 }
             }
         }
@@ -107,9 +109,7 @@ struct WorkingView: View {
     private var explanation: String {
         switch model.workStep {
         case .download:
-            let size = model.selectedDiscoverVideo.map { " (\($0.download.size.formatted(.byteCount(style: .file))))" } ?? ""
-            let quality = model.selectedDiscoverVideo?.is4K == false ? "1080p" : "4K"
-            return "Getting the \(quality) version\(size). Then you can trim it and pick the Aerial it replaces."
+            return model.downloadDetail
         case .convert:
             return "Making a temporary copy macOS can read. Your original file isn't touched."
         case .prepare:
@@ -143,6 +143,111 @@ private struct DialogContainer<Content: View>: View {
                 .padding(24)
         }
         .transition(.opacity)
+    }
+}
+
+/// Add from URL: a link to a video file, or a web page that yt-dlp can download from.
+struct URLImportDialog: View {
+    @Bindable var model: AppModel
+    @FocusState private var fieldFocused: Bool
+
+    private var isValid: Bool { URLImporter.webAddress(model.urlImportText) != nil }
+
+    var body: some View {
+        DialogContainer {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Add from URL").font(.system(size: 22, weight: .bold))
+                    Text("A link to a video file, or a page on YouTube, Vimeo and many other sites.")
+                        .font(.system(size: 14)).foregroundStyle(Theme.secondary)
+                }
+                HStack(spacing: 8) {
+                    Image(systemName: "link").foregroundStyle(Theme.secondary).accessibilityHidden(true)
+                    TextField("https://", text: $model.urlImportText)
+                        .textFieldStyle(.plain)
+                        .focused($fieldFocused)
+                        .onSubmit { if isValid && model.urlImportSectionProblem == nil { model.importURL(model.urlImportText) } }
+                }
+                .font(.system(size: 14))
+                .padding(.horizontal, 14)
+                .frame(height: 40)
+                .background(Capsule().fill(Color.white.opacity(0.1)))
+                toolHint
+                sectionFields
+                HStack(spacing: 10) {
+                    Text("Only use videos you're allowed to use.").font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                    Spacer(minLength: 0)
+                    Button("Cancel") { model.showURLImport = false }
+                        .buttonStyle(PillButtonStyle(kind: .quiet, height: 42))
+                        .fixedSize()
+                        .keyboardShortcut(.cancelAction)
+                    Button("Download") { model.importURL(model.urlImportText) }
+                        .buttonStyle(PillButtonStyle(kind: .primary, height: 42))
+                        .fixedSize()
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!isValid || model.urlImportSectionProblem != nil)
+                }
+            }
+        }
+        .onAppear { fieldFocused = true }
+    }
+
+    /// Optional start and end, so a long video isn't downloaded whole (needs yt-dlp and ffmpeg).
+    @ViewBuilder private var sectionFields: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Text("Only download").font(.system(size: 13, weight: .semibold))
+                timeField("start", text: $model.urlImportStart)
+                Text("to").font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                timeField("end", text: $model.urlImportEnd)
+                Spacer(minLength: 0)
+            }
+            .disabled(!YTDLP.canDownloadSections)
+            Group {
+                if !YTDLP.canDownloadSections {
+                    Text("Downloading only part of a video needs yt-dlp and ffmpeg (Install… above).")
+                        .foregroundStyle(Theme.secondary)
+                } else if let problem = model.urlImportSectionProblem {
+                    Text(problem).foregroundStyle(Theme.warning)
+                } else {
+                    Text("Optional, e.g. 1:30 to 1:45. Leave empty for the whole video.").foregroundStyle(Theme.secondary)
+                }
+            }
+            .font(.system(size: 12))
+        }
+    }
+
+    private func timeField(_ placeholder: String, text: Binding<String>) -> some View {
+        TextField(placeholder, text: text)
+            .textFieldStyle(.plain)
+            .font(.system(size: 13).monospacedDigit())
+            .multilineTextAlignment(.center)
+            .frame(width: 72, height: 30)
+            .background(Capsule().fill(Color.white.opacity(0.1)))
+            .onSubmit { if isValid && model.urlImportSectionProblem == nil { model.importURL(model.urlImportText) } }
+    }
+
+    /// Whether web pages work: yt-dlp (with deno and ffmpeg) is optional, direct video links always work.
+    /// Missing helpers can be installed from here.
+    @ViewBuilder private var toolHint: some View {
+        let missing = Tool.missingForURLImport
+        if missing.isEmpty {
+            Label("Pages are downloaded with yt-dlp: the best video up to 4K, without sound.", systemImage: "checkmark.circle")
+                .font(.system(size: 12)).foregroundStyle(Theme.secondary)
+        } else {
+            HStack(spacing: 10) {
+                Label(YTDLP.find() == nil
+                      ? "Only direct video links work right now. YouTube, Vimeo and others need yt-dlp."
+                      : "Missing \(ListFormatter.localizedString(byJoining: missing.map(\.rawValue))) for some sites and for parts of videos.",
+                      systemImage: "info.circle")
+                    .font(.system(size: 12)).foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button("Install…") { model.requestURLImportTools() }
+                    .buttonStyle(PillButtonStyle(kind: .secondary, height: 30))
+                    .fixedSize()
+            }
+        }
     }
 }
 

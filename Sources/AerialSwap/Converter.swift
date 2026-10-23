@@ -3,11 +3,7 @@ import Foundation
 /// Optional fallback for formats macOS can't decode (e.g. WebM/VP9, AV1 on chips without an AV1 decoder).
 /// Uses a locally installed ffmpeg; AerialSwap works without it for MP4/MOV with H.264/HEVC.
 enum FFmpeg {
-    static func find() -> URL? {
-        ["/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"]
-            .map { URL(fileURLWithPath: $0) }
-            .first { FileManager.default.isExecutableFile(atPath: $0.path) }
-    }
+    static func find() -> URL? { Tool.ffmpeg.location }
 }
 
 enum ConvertError: LocalizedError {

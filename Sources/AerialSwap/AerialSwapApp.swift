@@ -29,6 +29,16 @@ struct AerialSwapApp: App {
             ContentView(model: model)
         }
         .windowToolbarStyle(.unified(showsTitle: false))   // controls on the row of the traffic lights
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("Add Video File…") { model.showImporter = true }
+                    .keyboardShortcut("o")
+                    .disabled(model.isBusy)
+                Button("Add Video from URL…") { model.openURLImport() }
+                    .keyboardShortcut("o", modifiers: [.command, .shift])
+                    .disabled(model.isBusy || model.screen != .home)
+            }
+        }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1180, height: 760)
     }

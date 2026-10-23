@@ -104,8 +104,7 @@ private struct PlayingNow: View {
                 HStack(spacing: 10) {
                     Button("Choose from Library…") { model.openLibrary(for: asset) }
                         .buttonStyle(PillButtonStyle(kind: .light))
-                    Button("Add Video…") { model.select(asset); model.showImporter = true }
-                        .buttonStyle(PillButtonStyle(kind: .secondary))
+                    AddVideoMenu(model: model, kind: .secondary) { model.select(asset) }
                     UseForMenu(model: model, asset: asset)
                 }
                 .padding(.top, 6)
@@ -449,8 +448,7 @@ private struct LibraryPanel: View {
     @ViewBuilder private var footer: some View {
         VStack(spacing: 8) {
             if model.libraryItems.isEmpty {
-                Button("Add Video…") { model.showImporter = true }
-                    .buttonStyle(PillButtonStyle(kind: .primary, height: 44, fullWidth: true))
+                AddVideoMenu(model: model, height: 44, fullWidth: true)
             } else {
                 let target = model.selectedAsset.map { model.targetTitle(for: $0) } ?? "Aerial"
                 Button(model.isSelectedItemPlaying ? "Playing on \(target)" : "Use for \(target)") {

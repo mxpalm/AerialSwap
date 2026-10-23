@@ -181,7 +181,8 @@ struct PixabayClient: Sendable {
     }
 }
 
-/// Downloads one file with progress. Cancel stops the transfer.
+/// Downloads one file with progress and returns the address it finally came from (after redirects).
+/// Cancel stops the transfer.
 final class VideoDownloader: @unchecked Sendable {
     private let lock = NSLock()
     private var task: URLSessionDownloadTask?
@@ -195,9 +196,10 @@ final class VideoDownloader: @unchecked Sendable {
         }
     }
 
-    func run(_ url: URL, to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
+    @discardableResult
+    func run(_ url: URL, to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> URL? {
         try? FileManager.default.removeItem(at: destination)
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL?, Error>) in
             let task = URLSession.shared.downloadTask(with: url) { [weak self] temp, response, error in
                 self?.lock.withLock { self?.observation = nil }
                 if let error {
@@ -213,7 +215,7 @@ final class VideoDownloader: @unchecked Sendable {
                 // The temp file is deleted when this handler returns, so move it now.
                 do {
                     try FileManager.default.moveItem(at: temp, to: destination)
-                    continuation.resume()
+                    continuation.resume(returning: response?.url)
                 } catch {
                     continuation.resume(throwing: error)
                 }

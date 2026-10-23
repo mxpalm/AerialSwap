@@ -35,7 +35,15 @@ enum Screen { case intro, home, configure, working }
 enum HomeSection { case nowPlaying, library, discover }
 
 /// Long-running work and which screen shows it.
-enum WorkFlow { case download, convert, newVideo, saveOnly, quick }
+enum WorkFlow { case download, tools, convert, newVideo, saveOnly, quick }
+
+/// Installing missing helpers (yt-dlp, deno, ffmpeg) after the user agreed, and what to do once they're there.
+struct ToolInstallRequest: Equatable {
+    enum Then: Equatable { case reopenURLImport, convert(URL) }
+    var tools: [Tool]
+    var purpose: String        // "import videos from web pages", shown in the confirmation
+    var then: Then
+}
 
 /// Steps of preparing a new video, in order (shown as pills on the working screen).
 enum WorkStep: Int, Comparable {
@@ -116,6 +124,13 @@ final class AppModel {
     /// Set while the loaded source is a Pixabay download, so the library keeps the credit.
     @ObservationIgnored private var sourceCredit: DiscoverVideo?
     private var downloader: VideoDownloader?
+    private var urlImporter: URLImporter?
+    private var toolInstaller: ToolInstaller?
+    /// Waiting for the user's OK to install helpers (the confirmation alert).
+    var toolInstallRequest: ToolInstallRequest?
+    /// Shown on the working screen while downloading: where from ("Pixabay", "youtube.com") and what happens.
+    var downloadSource = ""
+    var downloadDetail = ""
 
     // Options (output fps is chosen automatically from the source, see Transcoder.autoFPS)
     var trimStart = 0.0
@@ -154,6 +169,11 @@ final class AppModel {
     /// The low-resolution dialog's actual-size preview of the current video.
     var resolutionPreview: ResolutionPreview?
     var isDropTargeted = false
+    /// The Add from URL dialog and what's typed in it.
+    var showURLImport = false
+    var urlImportText = ""
+    var urlImportStart = ""               // optional part of the video, e.g. "1:00"
+    var urlImportEnd = ""
 
     var selectedAsset: AerialAsset? { assets.first { $0.id == selectedID } }
     /// "Desktop" / "Screen Saver" when the Aerial is in use, otherwise its name.
@@ -170,7 +190,7 @@ final class AppModel {
     var screen: Screen {
         if showIntro { return .intro }
         switch workFlow {
-        case .download, .convert, .newVideo, .saveOnly: return .working
+        case .download, .tools, .convert, .newVideo, .saveOnly: return .working
         case .quick, nil: break
         }
         if sourceURL != nil { return .configure }
@@ -529,6 +549,9 @@ final class AppModel {
         self.downloader = downloader
         displayName = video.title
         backdrops["source"] = backdrops["discover-\(video.id)"]
+        downloadSource = "Pixabay"
+        downloadDetail = "Getting the \(video.is4K ? "4K" : "1080p") version (\(video.download.size.formatted(.byteCount(style: .file)))). "
+            + "Then you can trim it and pick the Aerial it replaces."
         startProgress("Downloading from Pixabay", flow: .download, step: .download)
         Log.info("Discover: downloading \(video.id) (\(video.download.width)x\(video.download.height), \(video.download.size) bytes)")
 
@@ -552,6 +575,145 @@ final class AppModel {
                     if case DiscoverError.cancelled = error { self.notice = Notice(kind: .info, text: "Download cancelled.") }
                     else { self.fail(error) }
                     self.showBackgroundVideo()
+                }
+            }
+        }
+    }
+
+    // MARK: - Add from URL
+
+    /// Opens the Add from URL dialog, filled in with a web address from the clipboard if there is one.
+    func openURLImport() {
+        guard !isBusy else { return }
+        let clipboard = NSPasteboard.general.string(forType: .string) ?? ""
+        urlImportText = URLImporter.webAddress(clipboard) != nil ? clipboard.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+        urlImportStart = ""
+        urlImportEnd = ""
+        showURLImport = true
+    }
+
+    /// The part of the video typed in the dialog: nil when both fields are empty, or when it isn't valid
+    /// (`urlImportSectionProblem` says why).
+    var urlImportSection: (start: Double?, end: Double?)? {
+        let start = URLImporter.seconds(urlImportStart), end = URLImporter.seconds(urlImportEnd)
+        guard urlImportSectionProblem == nil, start != nil || end != nil else { return nil }
+        return (start, end)
+    }
+
+    var urlImportSectionProblem: String? {
+        let startText = urlImportStart.trimmingCharacters(in: .whitespaces), endText = urlImportEnd.trimmingCharacters(in: .whitespaces)
+        if startText.isEmpty && endText.isEmpty { return nil }
+        let start = URLImporter.seconds(startText), end = URLImporter.seconds(endText)
+        if (!startText.isEmpty && start == nil) || (!endText.isEmpty && end == nil) { return "Use times like 1:30 or 90." }
+        if let start, let end, end <= start { return "The end has to be after the start." }
+        return nil
+    }
+
+    /// Downloads a video from a web address (a video file, or a page via yt-dlp) and opens it like an added video.
+    /// With a start or end time, only that part is downloaded.
+    func importURL(_ text: String) {
+        guard !isBusy else { return }
+        guard let url = URLImporter.webAddress(text) else { fail(URLImportError.notAWebAddress); return }
+        let section = YTDLP.canDownloadSections ? urlImportSection : nil
+        showURLImport = false
+        let importer = URLImporter()
+        urlImporter = importer
+        let host = url.host()?.replacingOccurrences(of: "www.", with: "") ?? "the web"
+        displayName = host
+        downloadSource = host
+        let part = section.map { " (\(clockText($0.start ?? 0)) to \($0.end.map(clockText) ?? "the end"))" } ?? ""
+        downloadDetail = "Getting the best version up to 4K, without sound\(part). Then you can trim it and pick the Aerial it replaces."
+        backdrops["source"] = nil
+        pauseBackgroundVideo(in: self.section)
+        startProgress("Downloading from \(host)", flow: .download, step: .download)
+        if section != nil { showsProgress = false }   // yt-dlp reports a section only when it's done
+        let directory = Self.workDir()
+
+        Task.detached {
+            do {
+                let (file, title) = try await importer.run(url, section: section, into: directory) { p in
+                    Task { @MainActor in self.progress = p }
+                }
+                await MainActor.run {
+                    self.stopProgress()
+                    if let old = self.convertedTempURL { try? FileManager.default.removeItem(at: old) }
+                    self.convertedTempURL = file   // deleted after the install, like an ffmpeg conversion
+                    self.sourceCredit = nil
+                    self.loadSource(file, displayName: title)
+                }
+            } catch {
+                await MainActor.run {
+                    self.stopProgress()
+                    self.displayName = nil
+                    if case URLImportError.cancelled = error { self.notice = Notice(kind: .info, text: "Download cancelled.") }
+                    else { self.fail(error) }
+                    self.showBackgroundVideo()
+                }
+            }
+        }
+    }
+
+    // MARK: - Helpers (yt-dlp, deno, ffmpeg)
+
+    /// From the URL dialog: install whatever web imports still need, then come back to the dialog.
+    func requestURLImportTools() {
+        let missing = Tool.missingForURLImport
+        guard !missing.isEmpty else { return }
+        showURLImport = false
+        toolInstallRequest = ToolInstallRequest(tools: missing, purpose: "import videos from web pages and download parts of them",
+                                                then: .reopenURLImport)
+    }
+
+    var toolInstallText: String {
+        guard let request = toolInstallRequest else { return "" }
+        let names = ListFormatter.localizedString(byJoining: request.tools.map(\.rawValue))
+        return "AerialSwap needs \(names) to \(request.purpose).\n\n\(ToolInstaller.plan(for: request.tools))"
+    }
+
+    func cancelToolInstall() {
+        if toolInstallRequest?.then == .reopenURLImport { showURLImport = true }
+        toolInstallRequest = nil
+    }
+
+    func installTools() {
+        guard let request = toolInstallRequest, !isBusy else { return }
+        toolInstallRequest = nil
+        let installer = ToolInstaller()
+        toolInstaller = installer
+        let names = ListFormatter.localizedString(byJoining: request.tools.filter { Homebrew.location == nil || $0 != .deno }.map(\.rawValue))
+        displayName = names
+        downloadSource = Homebrew.location != nil ? "Homebrew" : "the web"
+        downloadDetail = ToolInstaller.plan(for: request.tools)
+        pauseBackgroundVideo(in: section)
+        startProgress("Installing \(names)", flow: .tools, step: .download)
+        showsProgress = false
+        Log.info("Installing helpers: \(request.tools.map(\.rawValue))")
+
+        Task.detached {
+            do {
+                try await installer.install(request.tools) { line, fraction in
+                    Task { @MainActor in
+                        self.downloadDetail = line
+                        self.showsProgress = fraction != nil
+                        if let fraction { self.progress = fraction }
+                    }
+                }
+                await MainActor.run {
+                    self.stopProgress()
+                    self.displayName = nil
+                    self.notice = Notice(kind: .success, text: "Installed \(names).")
+                    switch request.then {
+                    case .reopenURLImport: self.showURLImport = true
+                    case .convert(let url): self.pendingConversion = url; self.convertPending()
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.stopProgress()
+                    self.displayName = nil
+                    if case ToolInstallError.cancelled = error { self.notice = Notice(kind: .info, text: "Installation cancelled.") }
+                    else { self.fail(error) }
+                    if request.then == .reopenURLImport { self.showURLImport = true }
                 }
             }
         }
@@ -754,8 +916,10 @@ final class AppModel {
         let reason = error.localizedDescription
         Log.error("Cannot read \(url.path): \(reason)")
         guard let ffmpeg = FFmpeg.find() else {
-            notice = Notice(kind: .error, text: "macOS can't read “\(url.lastPathComponent)”. Convert it to MP4 (H.264 or HEVC), "
-                + "or install ffmpeg (brew install ffmpeg) so AerialSwap can convert it for you.")
+            // Offer to install ffmpeg; once it's there, the conversion starts right away.
+            toolInstallRequest = ToolInstallRequest(tools: [.ffmpeg],
+                                                    purpose: "convert “\(url.lastPathComponent)”, which macOS can't read directly",
+                                                    then: .convert(url))
             return
         }
         pendingConversion = url
@@ -996,6 +1160,8 @@ final class AppModel {
         transcoder?.cancel()
         converter?.cancel()
         downloader?.cancel()
+        urlImporter?.cancel()
+        toolInstaller?.cancel()
     }
 
     /// Keeps the finished video in the library (non-fatal if that fails), then installs it.

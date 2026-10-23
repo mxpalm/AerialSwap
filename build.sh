@@ -19,7 +19,9 @@ APP="AerialSwap.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/AerialSwap"
-cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"   # regenerate with Tools/make_icon.swift
+# Liquid Glass icon (Assets.car) plus .icns fallback, compiled from Resources/AppIcon.icon by Tools/make_icon.py.
+cp Resources/Assets.car "$APP/Contents/Resources/Assets.car"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # Optional Pixabay API key for Discover (git-ignored; see README).
 [[ -f Resources/pixabay.key ]] && cp Resources/pixabay.key "$APP/Contents/Resources/pixabay.key"
 
@@ -33,6 +35,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key><string>local.aerialswap</string>
     <key>CFBundleExecutable</key><string>AerialSwap</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>CFBundleIconName</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundleVersion</key><string>1</string>

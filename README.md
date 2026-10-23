@@ -12,6 +12,15 @@ natively (lock screen + desktop) with no background process. Personal use, macOS
 
 Needs only the Command Line Tools (`swift build` + `codesign --sign -`).
 
+The app icon is a Liquid Glass icon: `Resources/AppIcon.icon` (open it in Icon Composer). Its
+compiled form, `Resources/Assets.car` plus the `AppIcon.icns` fallback, is committed, so building
+needs no Xcode. After changing the icon, recompile with Xcode installed:
+
+```sh
+python3 Tools/make_icon.py            # regenerate the artwork from the script, then compile
+python3 Tools/make_icon.py --compile  # only compile (keeps edits made in Icon Composer)
+```
+
 ```sh
 open /Applications/AerialSwap.app
 ```

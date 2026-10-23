@@ -1,0 +1,79 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "display-p3:0.24,0.44,1.00,1.00",
+      "display-p3:0.11,0.17,0.42,1.00"
+    ],
+    "orientation": {
+      "start": {
+        "x": 0.5,
+        "y": 0.0
+      },
+      "stop": {
+        "x": 0.5,
+        "y": 1.0
+      }
+    }
+  },
+  "groups": [
+    {
+      "name": "New video",
+      "layers": [
+        {
+          "image-name": "new-play.svg",
+          "name": "new-play",
+          "glass": true,
+          "opacity": 1.0
+        },
+        {
+          "image-name": "new-box.svg",
+          "name": "new-box",
+          "glass": true,
+          "opacity": 0.55
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.35
+      },
+      "specular": true,
+      "lighting": "individual"
+    },
+    {
+      "name": "Old video",
+      "layers": [
+        {
+          "image-name": "old-play.svg",
+          "name": "old-play",
+          "glass": true,
+          "opacity": 0.7
+        },
+        {
+          "image-name": "old-box.svg",
+          "name": "old-box",
+          "glass": true,
+          "opacity": 0.3
+        }
+      ],
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.3
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.6
+      },
+      "specular": true,
+      "lighting": "individual"
+    }
+  ],
+  "supported-platforms": {
+    "squares": [
+      "macOS"
+    ]
+  }
+}

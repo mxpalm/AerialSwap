@@ -15,24 +15,17 @@ enum MotionMode: String, CaseIterable, Identifiable {
 }
 
 /// A message shown as a toast at the bottom of the window.
-/// Moving the desktop or screen saver away from `fromID` to the Aerial picked in the dialog.
-struct RoleMove: Equatable {
-    var role: AerialRole            // .desktop or .screenSaver
-    var fromID: String
-    var choiceID: String?
-}
-
 struct Notice: Equatable {
     enum Kind { case info, success, error }
     var kind: Kind
     var text: String
 }
 
-/// The full-window screens. Dialogs (reset, low resolution) are overlays on top of these.
+/// The full-window screens. Dialogs (success, low resolution) are overlays on top of these.
 enum Screen { case intro, home, configure, working }
 
 /// The sections of the home screen (the switcher in the top bar).
-enum HomeSection { case nowPlaying, library, discover }
+enum HomeSection { case library, discover }
 
 /// Long-running work and which screen shows it.
 enum WorkFlow { case download, tools, convert, newVideo, saveOnly, quick }
@@ -47,14 +40,15 @@ struct ToolInstallRequest: Equatable {
 
 /// Steps of preparing a new video, in order (shown as pills on the working screen).
 enum WorkStep: Int, Comparable {
-    case download, convert, prepare, save, install
+    case download, convert, prepare, save, show
     static func < (a: WorkStep, b: WorkStep) -> Bool { a.rawValue < b.rawValue }
 }
 
-/// Shown in the success dialog over Now Playing after an install.
+/// Shown in the success dialog over the Library after Set as Wallpaper.
 struct DoneInfo: Equatable {
     var assetID: String
-    var assetName: String
+    var role: String               // "Desktop & Screen Saver", "Desktop", …; "" when no role could be switched and the
+                                   // user has to pick it in System Settings
     var videoName: String
     var took: TimeInterval?        // nil when a library wallpaper was switched in seconds
     var summary: String?           // "60 fps · Smooth · Loop"
@@ -67,6 +61,7 @@ struct DoneInfo: Equatable {
 final class AppModel {
     let store = AerialStore()
     let library = WallpaperLibrary()
+    let group = AerialGroup()
     @ObservationIgnored let isSnapshot: Bool   // rendering PNGs with sample data (--snapshot): no disk writes
 
     // Source (sourceURL may be an ffmpeg-converted temp file; displayName is the user's original file name)
@@ -84,17 +79,12 @@ final class AppModel {
     private var convertedTempURL: URL?
     @ObservationIgnored private var loopObserver: NSObjectProtocol?
 
-    // Target
+    // Aerials: Apple's and our group's (see AerialGroup)
     var assets: [AerialAsset] = []
-    var statuses: [String: AerialStatus] = [:]
-    var installRecords: [String: InstallRecord] = [:]
-    var reinstallableIDs: Set<String> = []
-    var thumbnails: [String: NSImage] = [:]        // what each Aerial plays (a frame of the user's video when replaced)
-    var appleThumbnails: [String: NSImage] = [:]   // Apple's own thumbnail
-    @ObservationIgnored private var thumbnailKeys: [String: String] = [:]   // what each cached thumbnail shows
-    var selectedID: String?
     var desktopID: String?
     var idleID: String?
+    @ObservationIgnored private var isSyncingGroup = false
+    @ObservationIgnored private var groupSyncPending = false
 
     // Large frames for full-window backgrounds, keyed by backdropKey(for:), "lib-<id>", "source"
     var backdrops: [String: NSImage] = [:]
@@ -106,7 +96,11 @@ final class AppModel {
     var selectedLibraryID: String?
     var deleteCandidate: LibraryItem?
     var librarySearch = ""
-    @ObservationIgnored private var didImportLegacy = false
+    @ObservationIgnored private var didCheckLibrary = false
+    @ObservationIgnored private var didPreselect = false
+
+    /// A newer release on GitHub (see UpdateChecker), offered in the ⚙ menu.
+    var availableUpdate: AppUpdate?
 
     // Discover: free videos from Pixabay (see PixabayClient)
     let pixabay = PixabayClient()
@@ -141,7 +135,7 @@ final class AppModel {
 
     // Progress
     var isBusy = false
-    var showsProgress = false         // a long-running transcode/conversion (vs. a quick install/restore)
+    var showsProgress = false         // a long-running transcode/conversion (vs. a quick switch)
     var workFlow: WorkFlow?
     var workStep = WorkStep.prepare
     var phase = ""
@@ -156,16 +150,12 @@ final class AppModel {
 
     // Transient UI state
     var showIntro: Bool
-    var section = HomeSection.nowPlaying
+    var section = HomeSection.library
     var pendingConversion: URL?       // unreadable file waiting for the user's OK to convert with ffmpeg
     var conversionPrompt = ""
     var showImporter = false
     var confirmSetWallpaper = false
     var showResolutionAlert = false   // dialog right after choosing a very low-resolution video
-    var restoreCandidate: AerialAsset?
-    var dismissedResetIDs: Set<String> = []
-    /// Unchecking Desktop or Screen Saver on an Aerial: the dialog asks which Aerial takes over.
-    var roleMove: RoleMove?
     /// The low-resolution dialog's actual-size preview of the current video.
     var resolutionPreview: ResolutionPreview?
     var isDropTargeted = false
@@ -175,9 +165,8 @@ final class AppModel {
     var urlImportStart = ""               // optional part of the video, e.g. "1:00"
     var urlImportEnd = ""
 
-    var selectedAsset: AerialAsset? { assets.first { $0.id == selectedID } }
-    /// "Desktop" / "Screen Saver" when the Aerial is in use, otherwise its name.
-    func targetTitle(for asset: AerialAsset) -> String { roleTitle(for: asset.id) ?? asset.name }
+    /// What the desktop shows: the window's background when no library wallpaper is picked.
+    var desktopAsset: AerialAsset? { assets.first { $0.id == desktopID } }
     /// Where macOS shows this Aerial: "Desktop", "Screen Saver", "Desktop & Screen Saver", or nil when it isn't in use.
     func roleTitle(for id: String) -> String? {
         switch (id == desktopID, id == idleID) {
@@ -251,26 +240,18 @@ final class AppModel {
             + "Some videos look clearly sharper, others only slightly."
     }
     var selectedLibraryItem: LibraryItem? { libraryItems.first { $0.id == selectedLibraryID } }
-    /// "Set as Wallpaper" installs the selected library item when no new video is loaded.
+    /// "Set as Wallpaper" uses the selected library item when no new video is loaded.
     var isUsingLibrary: Bool { sourceURL == nil && selectedLibraryItem != nil }
     var canSetWallpaper: Bool {
-        !isBusy && selectedAsset != nil && (sourceInfo != nil || isUsingLibrary) && !(isUsingLibrary && isSelectedItemPlaying)
+        !isBusy && (sourceInfo != nil || isUsingLibrary) && !(isUsingLibrary && isSelectedItemPlaying)
     }
-    /// The chosen library wallpaper is already what the chosen Aerial plays, so using it again would change nothing.
-    var isSelectedItemPlaying: Bool {
-        guard let asset = selectedAsset, let item = selectedLibraryItem,
-              case .replaced = statuses[asset.id] ?? .original else { return false }
-        return installRecords[asset.id]?.libraryID == item.id
-    }
+    /// The chosen library wallpaper is already on the desktop, so using it again would change nothing.
+    var isSelectedItemPlaying: Bool { selectedLibraryItem.map { $0.id == desktopID } ?? false }
     var libraryBytes: Int64 { libraryItems.reduce(0) { $0 + $1.bytes } }
     var filteredLibraryItems: [LibraryItem] {
         let query = librarySearch.trimmingCharacters(in: .whitespaces)
         guard !query.isEmpty else { return libraryItems }
         return libraryItems.filter { $0.name.localizedCaseInsensitiveContains(query) }
-    }
-    /// The first Aerial macOS reset that we can put the user's video back on (and they haven't waved off).
-    var resetAlertAsset: AerialAsset? {
-        assets.first { statuses[$0.id] == .resetByMacOS && reinstallableIDs.contains($0.id) && !dismissedResetIDs.contains($0.id) }
     }
 
     init(snapshot: Bool = false) {
@@ -280,6 +261,13 @@ final class AppModel {
         Self.removeWorkDir()   // leftovers from a crash or a force quit
         let pixabay = pixabay
         Task.detached(priority: .background) { pixabay.pruneCache() }
+        Task {
+            guard let update = try? await UpdateChecker.check() else { return }
+            availableUpdate = update
+            if notice == nil {
+                notice = Notice(kind: .info, text: "AerialSwap \(update.version) is available. Get it from the ⚙ menu.")
+            }
+        }
         let center = NotificationCenter.default
         center.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.shutdown() }
@@ -287,6 +275,11 @@ final class AppModel {
         // Statuses can change while we're in the background (macOS may reset a file), so refresh on activation.
         center.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { if self?.isBusy == false { self?.refreshAssets() } }
+        }
+        GroupWatcher.install()
+        if GroupWatcher.isTranslocated {
+            notice = Notice(kind: .error, text: "Move AerialSwap to your Applications folder and open it from there, "
+                            + "so the AerialSwap group comes back after macOS updates its Aerials.")
         }
     }
 
@@ -299,43 +292,26 @@ final class AppModel {
 
     func showIntroAgain() { showIntro = true }
 
-    // MARK: - Target
+    // MARK: - Aerials
 
     func refreshAssets() {
         guard !isSnapshot else { return }
         do {
             assets = try store.listAssets()
-            statuses = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, store.status(of: $0)) })
-            installRecords = store.loadState()
-            reinstallableIDs = Set(assets.filter { store.canReinstall($0) }.map(\.id))
             refreshLibrary()
-            for asset in assets { updateThumbnail(for: asset) }
-            importLegacyInstallsIfNeeded()
+            syncGroup()
+            repairLibraryIfNeeded()
             let detected = store.detectSelection()
             desktopID = detected.desktop.flatMap { id in assets.contains { $0.id == id } ? id : nil }
             idleID = detected.idle.flatMap { id in assets.contains { $0.id == id } ? id : nil }
-            if selectedID == nil || !assets.contains(where: { $0.id == selectedID }) {
-                selectedID = desktopID ?? idleID ?? assets.first?.id
-            }
-            for asset in assets {
-                loadBackdrop(backdropKey(for: asset), from: asset.videoURL)
-                if statuses[asset.id] == .resetByMacOS, reinstallableIDs.contains(asset.id) {
-                    loadBackdrop("installed-\(asset.id)", from: store.installedCopyURL(for: asset.id))
-                }
-            }
+            if let asset = desktopAsset { loadBackdrop(backdropKey(for: asset), from: asset.videoURL) }
+            preselectPlayingItem()
         } catch {
             fail(error)
         }
     }
 
-    /// Changes whenever the live file changes, so a stale frame is never shown after an install or reset.
-    func backdropKey(for asset: AerialAsset) -> String {
-        switch statuses[asset.id] ?? .original {
-        case .original: "asset-\(asset.id)-apple"
-        case .replaced(_, let date, _): "asset-\(asset.id)-\(date.timeIntervalSince1970)"
-        case .resetByMacOS: "asset-\(asset.id)-reset"
-        }
-    }
+    func backdropKey(for asset: AerialAsset) -> String { "asset-\(asset.id)" }
 
     /// Loads a large frame of a video once; views read it from `backdrops`.
     func loadBackdrop(_ key: String, from url: URL) {
@@ -345,33 +321,6 @@ final class AppModel {
             let frame = await WallpaperLibrary.middleFrame(of: url, maxSize: CGSize(width: 1920, height: 1080))
             pendingBackdrops.remove(key)
             if let frame { backdrops[key] = NSImage(cgImage: frame, size: NSSize(width: frame.width, height: frame.height)) }
-        }
-    }
-
-    /// Apple's thumbnail for original Aerials; a frame of the user's video for replaced ones.
-    private func updateThumbnail(for asset: AerialAsset) {
-        var key = "apple"
-        var video: URL?
-        var saved: URL?
-        if case .replaced(_, let date, _) = statuses[asset.id] ?? .original {
-            key = "installed-\(date.timeIntervalSince1970)"
-            if let id = store.libraryID(of: asset), let item = libraryItems.first(where: { $0.id == id }) {
-                saved = library.thumbnailURL(item)
-            }
-            let copy = store.installedCopyURL(for: asset.id)
-            video = FileManager.default.fileExists(atPath: copy.path) ? copy : asset.videoURL
-        }
-        guard thumbnailKeys[asset.id] != key else { return }
-        thumbnailKeys[asset.id] = key
-        let appleThumbnail = NSImage(contentsOf: asset.thumbnailURL)
-        appleThumbnails[asset.id] = appleThumbnail
-        if let saved, let image = NSImage(contentsOf: saved) { thumbnails[asset.id] = image; return }
-        guard let video else { thumbnails[asset.id] = appleThumbnail; return }
-        Task {
-            let frame = await WallpaperLibrary.middleFrame(of: video)
-            guard thumbnailKeys[asset.id] == key else { return }   // status changed meanwhile
-            thumbnails[asset.id] = frame.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
-                ?? appleThumbnail
         }
     }
 
@@ -386,10 +335,31 @@ final class AppModel {
         if let id = selectedLibraryID, !libraryItems.contains(where: { $0.id == id }) { selectedLibraryID = nil }
     }
 
-    func openLibrary(for asset: AerialAsset? = nil) {
-        guard !isBusy else { return }
-        if let asset { selectedID = asset.id }
-        section = .library
+    /// On launch, picks the library wallpaper macOS shows, so the window opens on what's playing.
+    private func preselectPlayingItem() {
+        guard !didPreselect else { return }
+        didPreselect = true
+        guard selectedLibraryID == nil, let item = libraryItems.first(where: { $0.id == desktopID || $0.id == idleID }) else { return }
+        selectLibraryItem(item)
+    }
+
+    /// Adds every library wallpaper to the AerialSwap group in System Settings (see AerialGroup), in the background.
+    /// Runs again afterwards when asked while a sync is running, so the last library change always gets through.
+    func syncGroup() {
+        guard !isSnapshot else { return }
+        guard !isSyncingGroup else { groupSyncPending = true; return }
+        isSyncingGroup = true
+        let group = group, items = libraryItems
+        Task {
+            do {
+                let changed = try await Task.detached { try await group.sync(items) }.value
+                if changed && !isBusy { refreshAssets() }
+            } catch {
+                Log.error("Group: \(error.localizedDescription)")
+            }
+            isSyncingGroup = false
+            if groupSyncPending { groupSyncPending = false; syncGroup() }
+        }
     }
 
     func selectLibraryItem(_ item: LibraryItem) {
@@ -399,13 +369,8 @@ final class AppModel {
         showBackgroundVideo()
     }
 
-    /// Where this library item plays now: "Desktop" / "Screen Saver" for Aerials in use, otherwise the Aerial's name.
-    func playingAerials(for item: LibraryItem) -> [String] {
-        assets.filter { asset in
-            if case .replaced = statuses[asset.id] ?? .original { return installRecords[asset.id]?.libraryID == item.id }
-            return false
-        }.map { targetTitle(for: $0) }
-    }
+    /// Where macOS shows this library item: "Desktop", "Screen Saver", "Desktop & Screen Saver", or nil.
+    func role(of item: LibraryItem) -> String? { roleTitle(for: item.id) }
 
     func deleteLibraryItem(_ item: LibraryItem) {
         if backgroundVideoKey == "lib-\(item.id)" { stopBackgroundVideo() }   // don't hold the file open
@@ -417,6 +382,7 @@ final class AppModel {
             fail(error)
         }
         refreshLibrary()
+        syncGroup()
     }
 
     func revealLibrary() {
@@ -424,35 +390,16 @@ final class AppModel {
         NSWorkspace.shared.activateFileViewerSelecting([FileManager.default.fileExists(atPath: dir.path) ? dir : store.supportDir])
     }
 
-    /// Installs from before the library existed have a Reinstall copy; import it once so it shows up.
-    private func importLegacyInstallsIfNeeded() {
-        guard !didImportLegacy, !library.exists else { return }
-        didImportLegacy = true
-        let candidates = assets.compactMap { asset -> (AerialAsset, InstallRecord, URL)? in
-            let copy = store.installedCopyURL(for: asset.id)
-            guard let record = store.loadState()[asset.id], record.libraryID == nil,
-                  FileManager.default.fileExists(atPath: copy.path) else { return nil }
-            return (asset, record, copy)
-        }
+    /// Rebuilds an unreadable library index from the videos in the folder (once per launch).
+    private func repairLibraryIfNeeded() {
+        guard !didCheckLibrary else { return }
+        didCheckLibrary = true
         Task {
-            for (asset, record, copy) in candidates {
-                do {
-                    let item = try await library.add(copy, name: record.sourceName)
-                    try store.setLibraryID(item.id, for: asset)
-                } catch {
-                    Log.error("Library import of \(record.sourceName) failed: \(error.localizedDescription)")
-                }
-            }
-            try? library.createIfMissing()
+            guard let count = await library.repairIfNeeded() else { return }
             refreshLibrary()
-            thumbnailKeys.removeAll()          // let replaced cards pick up the saved thumbnails
-            for asset in assets { updateThumbnail(for: asset) }
+            notice = Notice(kind: .error, text: "Your library's index was damaged. \(count) wallpaper(s) were recovered as "
+                            + "“Recovered wallpaper”; the old index is kept in the library folder.")
         }
-    }
-
-    func select(_ asset: AerialAsset) {
-        guard !isBusy else { return }
-        selectedID = asset.id
     }
 
     // MARK: - Discover
@@ -551,7 +498,7 @@ final class AppModel {
         backdrops["source"] = backdrops["discover-\(video.id)"]
         downloadSource = "Pixabay"
         downloadDetail = "Getting the \(video.is4K ? "4K" : "1080p") version (\(video.download.size.formatted(.byteCount(style: .file)))). "
-            + "Then you can trim it and pick the Aerial it replaces."
+            + "Then you can trim it and set it as your wallpaper."
         startProgress("Downloading from Pixabay", flow: .download, step: .download)
         Log.info("Discover: downloading \(video.id) (\(video.download.width)x\(video.download.height), \(video.download.size) bytes)")
 
@@ -563,7 +510,7 @@ final class AppModel {
                 await MainActor.run {
                     self.stopProgress()
                     if let old = self.convertedTempURL { try? FileManager.default.removeItem(at: old) }
-                    self.convertedTempURL = destination   // deleted after the install, like an ffmpeg conversion
+                    self.convertedTempURL = destination   // deleted once it's saved, like an ffmpeg conversion
                     self.sourceCredit = video
                     self.loadSource(destination, displayName: video.title)
                 }
@@ -622,7 +569,7 @@ final class AppModel {
         displayName = host
         downloadSource = host
         let part = section.map { " (\(clockText($0.start ?? 0)) to \($0.end.map(clockText) ?? "the end"))" } ?? ""
-        downloadDetail = "Getting the best version up to 4K, without sound\(part). Then you can trim it and pick the Aerial it replaces."
+        downloadDetail = "Getting the best version up to 4K, without sound\(part). Then you can trim it and set it as your wallpaper."
         backdrops["source"] = nil
         pauseBackgroundVideo(in: self.section)
         startProgress("Downloading from \(host)", flow: .download, step: .download)
@@ -637,7 +584,7 @@ final class AppModel {
                 await MainActor.run {
                     self.stopProgress()
                     if let old = self.convertedTempURL { try? FileManager.default.removeItem(at: old) }
-                    self.convertedTempURL = file   // deleted after the install, like an ffmpeg conversion
+                    self.convertedTempURL = file   // deleted once it's saved, like an ffmpeg conversion
                     self.sourceCredit = nil
                     self.loadSource(file, displayName: title)
                 }
@@ -744,8 +691,6 @@ final class AppModel {
         case .discover:
             guard let video = selectedDiscoverVideo, let url = video.previewURL else { return nil }
             return ("discover-\(video.id)", url)
-        case .nowPlaying:
-            return nil
         }
     }
 
@@ -772,7 +717,6 @@ final class AppModel {
         switch section {
         case .library: "lib-"
         case .discover: "discover-"
-        case .nowPlaying: "-"   // matches no key
         }
     }
 
@@ -845,7 +789,6 @@ final class AppModel {
         }
         if displayName == nil { sourceCredit = nil }       // the user's own file
         showIntro = false
-        if section == .library { section = .nowPlaying }   // Discover stays, so Back returns to it
         done = nil
         sourceURL = url
         self.displayName = displayName ?? url.deletingPathExtension().lastPathComponent
@@ -1092,27 +1035,24 @@ final class AppModel {
         isBusy = false; showsProgress = false; phase = ""; workFlow = nil
     }
 
-    /// Called after the user confirmed: installs the selected library item, or prepares the new video.
+    /// Called after the user confirmed: shows the selected library item, or prepares the new video first.
     func setAsWallpaper() {
-        if isUsingLibrary, let item = selectedLibraryItem, let asset = selectedAsset {
-            isBusy = true; workFlow = .quick; phase = "Installing"; notice = nil
-            install(library.videoURL(item), name: item.name, libraryID: item.id, summary: item.settingsSummary,
-                    savedToLibrary: false, over: asset)
+        if isUsingLibrary, let item = selectedLibraryItem {
+            isBusy = true; workFlow = .quick; phase = "Switching"; notice = nil
+            show(item, savedToLibrary: false)
             return
         }
-        transcode(thenInstall: true)
+        transcode(thenShow: true)
     }
 
-    /// Prepares the new video and keeps it in the library without touching any Aerial.
+    /// Prepares the new video and keeps it in the library (and so the AerialSwap group) without switching to it.
     func saveToLibraryOnly() {
-        transcode(thenInstall: false)
+        transcode(thenShow: false)
     }
 
-    /// Transcodes the source, saves it to the library, then (optionally) installs it over the selected Aerial.
-    private func transcode(thenInstall: Bool) {
+    /// Transcodes the source, saves it to the library, then (optionally) shows it on the desktop and screen saver.
+    private func transcode(thenShow: Bool) {
         guard let source = sourceURL, let info = sourceInfo else { return }
-        let asset = selectedAsset
-        if thenInstall && asset == nil { return }
         let options = TranscodeOptions(fps: outputFPS, trimStart: trimStart,
                                        trimEnd: trimEnd < info.duration ? trimEnd : nil,
                                        loopCrossfade: canSmoothLoop && smoothLoop ? Self.loopCrossfade : 0,
@@ -1133,7 +1073,7 @@ final class AppModel {
             phase += " (first time: downloading Apple's enhancement model)"
         }
         workStarted = .now
-        startProgress(phase, flow: thenInstall ? .newVideo : .saveOnly, step: .prepare)
+        startProgress(phase, flow: thenShow ? .newVideo : .saveOnly, step: .prepare)
 
         Task.detached {
             do {
@@ -1142,8 +1082,7 @@ final class AppModel {
                 }
                 await MainActor.run {
                     self.transcodedURL = destination
-                    if thenInstall, let asset { self.saveAndInstall(destination, settings: settings, over: asset) }
-                    else { self.saveOnly(destination, settings: settings) }
+                    self.save(destination, settings: settings, thenShow: thenShow)
                 }
             } catch {
                 await MainActor.run {
@@ -1164,57 +1103,64 @@ final class AppModel {
         toolInstaller?.cancel()
     }
 
-    /// Keeps the finished video in the library (non-fatal if that fails), then installs it.
-    private func saveAndInstall(_ file: URL, settings: LibrarySettings, over asset: AerialAsset) {
+    /// Keeps the finished video in the library, then shows it, or (thenShow: false) opens it in the library.
+    private func save(_ file: URL, settings: LibrarySettings, thenShow: Bool) {
         let name = displayName ?? "your video"
         showsProgress = false; phase = "Saving to your library"; workStep = .save
         Task {
             do {
                 let item = try await library.add(file, name: name, settings: settings)
-                install(library.videoURL(item), name: name, libraryID: item.id, summary: item.settingsSummary,
-                        savedToLibrary: true, over: asset)
-            } catch {
-                Log.error("Could not save to library: \(error.localizedDescription)")
-                install(file, name: name, libraryID: nil, summary: nil, savedToLibrary: false, over: asset)
-            }
-        }
-    }
-
-    private func saveOnly(_ file: URL, settings: LibrarySettings) {
-        let name = displayName ?? "your video"
-        showsProgress = false; phase = "Saving to your library"; workStep = .save
-        Task {
-            do {
-                let item = try await library.add(file, name: name, settings: settings)
-                removeTempFilesAfterInstall()
+                if thenShow { show(item, savedToLibrary: true); return }
+                removeTempFilesAfterSaving()
                 stopPreview()
                 sourceURL = nil; sourceInfo = nil; displayName = nil; filmstrip = []
                 refreshLibrary()
+                syncGroup()
                 section = .library
                 selectLibraryItem(item)
-                notice = Notice(kind: .success, text: "Saved “\(name)” to your library.")
+                notice = Notice(kind: .success, text: "Saved “\(name)” to your library. It's in System Settings → Wallpaper → AerialSwap.")
             } catch {
                 fail(error)
             }
+            workStarted = nil
             stopProgress()
         }
     }
 
-    private func install(_ file: URL, name: String, libraryID: String?, summary: String?, savedToLibrary: Bool,
-                         over asset: AerialAsset) {
-        showsProgress = false; phase = "Installing"; workStep = .install
+    /// Adds the library item to the AerialSwap group and points the desktop and screen saver at it. Only choices that
+    /// already show an Aerial can be switched (see AerialStore.setSelection); otherwise the user picks it in System Settings.
+    private func show(_ item: LibraryItem, savedToLibrary: Bool) {
+        showsProgress = false; phase = "Adding to your wallpapers"; workStep = .show
+        refreshLibrary()
+        let group = group, store = store, items = libraryItems
         Task {
             do {
-                try await store.install(file, sourceName: name, over: asset, protect: false, libraryID: libraryID)
-                removeTempFilesAfterInstall()
-                selectedLibraryID = nil
-                stopBackgroundVideo()
-                section = .nowPlaying
+                let switched = try await Task.detached { () -> Int in
+                    let changed = try await group.sync(items, restart: false)
+                    let switched = try store.setSelection(item.id, desktop: true, idle: true)   // restarts WallpaperAgent
+                    if switched == 0 && changed { store.restartWallpaperAgent() }
+                    return switched
+                }.value
+                // WallpaperAgent restarts and may rewrite the file; see which roles took the change.
+                if switched > 0 { try? await Task.sleep(for: .seconds(1.5)) }
+                let now = store.detectSelection()
+                let role = switch (now.desktop == item.id, now.idle == item.id) {
+                case (true, true): "Desktop & Screen Saver"
+                case (true, false): "Desktop"
+                case (false, true): "Screen Saver"
+                case (false, false): ""
+                }
+                removeTempFilesAfterSaving()
                 stopPreview()
                 sourceURL = nil; sourceInfo = nil; displayName = nil; filmstrip = []
-                done = DoneInfo(assetID: asset.id, assetName: asset.name, videoName: name,
+                section = .library
+                selectedLibraryID = item.id   // shows what now plays (selectLibraryItem waits while busy)
+                loadBackdrop("lib-\(item.id)", from: library.videoURL(item))
+                showBackgroundVideo()
+                done = DoneInfo(assetID: item.id, role: role, videoName: item.name,
                                 took: savedToLibrary ? workStarted.map { Date.now.timeIntervalSince($0) } : nil,
-                                summary: summary, savedToLibrary: savedToLibrary)
+                                summary: item.settingsSummary, savedToLibrary: savedToLibrary)
+                Log.info("Group: \(item.name) (\(item.id)) shown on \(role.isEmpty ? "nothing yet" : role)")
             } catch {
                 fail(error)
             }
@@ -1226,59 +1172,33 @@ final class AppModel {
 
     func finishDone() { done = nil }
 
-    /// Puts our last installed video back after macOS reset the file.
-    func reinstall(_ asset: AerialAsset) {
-        isBusy = true; workFlow = .quick; phase = "Reinstalling"; notice = nil
-        Task {
-            do {
-                try await store.reinstall(asset)
-                notice = Notice(kind: .success, text: "Your video is back on “\(asset.name)”.")
-            } catch {
-                fail(error)
-            }
-            stopProgress()
-            refreshAssets()
-        }
-    }
-
-    /// Makes macOS show this Aerial on the desktop and/or as the screen saver (System Settings → Wallpaper's choice).
-    /// Something always has to be the desktop and the screen saver, so unchecking one asks what replaces it.
-    /// The Aerial it used before (if we switched it) is suggested.
-    func beginRoleMove(_ role: AerialRole, from asset: AerialAsset) {
-        let previous = UserDefaults.standard.string(forKey: role == .desktop ? "previousDesktopID" : "previousIdleID")
-        let others = assets.filter { $0.id != asset.id }
-        let suggestion = others.first { $0.id == previous }?.id ?? others.first?.id
-        roleMove = RoleMove(role: role, fromID: asset.id, choiceID: suggestion)
-    }
-
-    func finishRoleMove() {
-        guard let move = roleMove, let id = move.choiceID, let asset = assets.first(where: { $0.id == id }) else { return }
-        roleMove = nil
-        useAerial(asset, desktop: move.role == .desktop, screenSaver: move.role == .screenSaver)
-    }
-
-    func useAerial(_ asset: AerialAsset, desktop: Bool, screenSaver: Bool) {
+    /// Makes macOS show this library wallpaper on the desktop and/or as the screen saver, without the success dialog.
+    /// To take a role away, the user picks another wallpaper for it (here or in System Settings).
+    func use(_ item: LibraryItem, desktop: Bool, screenSaver: Bool) {
         guard !isBusy, desktop || screenSaver else { return }
-        // Remember what is replaced, so taking the role away again can suggest it.
-        if desktop, let id = desktopID, id != asset.id { UserDefaults.standard.set(id, forKey: "previousDesktopID") }
-        if screenSaver, let id = idleID, id != asset.id { UserDefaults.standard.set(id, forKey: "previousIdleID") }
         isBusy = true; workFlow = .quick; phase = "Switching"; notice = nil
-        let store = store
+        let group = group, store = store, items = libraryItems
+        let name = prettyName(item.name)
         let role = desktop && screenSaver ? "desktop and screen saver" : (desktop ? "desktop" : "screen saver")
         Task {
             do {
-                let changed = try await Task.detached { try store.setSelection(asset.id, desktop: desktop, idle: screenSaver) }.value
-                if changed == 0 {
-                    notice = Notice(kind: .error, text: "Your \(role) doesn't show an Aerial right now. Pick any Aerial for it "
-                                    + "in System Settings → Wallpaper first, then switch it here.")
+                let switched = try await Task.detached { () -> Int in
+                    let synced = try await group.sync(items, restart: false)
+                    let switched = try store.setSelection(item.id, desktop: desktop, idle: screenSaver)   // restarts WallpaperAgent
+                    if switched == 0 && synced { store.restartWallpaperAgent() }
+                    return switched
+                }.value
+                if switched == 0 {
+                    notice = Notice(kind: .error, text: "Your \(role) doesn't show an Aerial right now. Pick “\(name)” in "
+                                    + "System Settings → Wallpaper → AerialSwap instead.")
                 } else {
                     // WallpaperAgent restarts and may rewrite the file; check that our choice stuck.
                     try? await Task.sleep(for: .seconds(1.5))
                     let now = store.detectSelection()
-                    if (desktop && now.desktop != asset.id) || (screenSaver && now.idle != asset.id) {
-                        notice = Notice(kind: .error, text: "macOS didn't take the change. Pick “\(asset.name)” in System Settings → Wallpaper instead.")
+                    if (desktop && now.desktop != item.id) || (screenSaver && now.idle != item.id) {
+                        notice = Notice(kind: .error, text: "macOS didn't take the change. Pick “\(name)” in System Settings → Wallpaper → AerialSwap instead.")
                     } else {
-                        notice = Notice(kind: .success, text: "“\(asset.name)” is now your \(role).")
+                        notice = Notice(kind: .success, text: "“\(name)” is now your \(role).")
                     }
                 }
             } catch {
@@ -1289,27 +1209,26 @@ final class AppModel {
         }
     }
 
-    func restore(_ asset: AerialAsset) {
-        notice = nil
-        do {
-            try store.restore(asset)
-            notice = Notice(kind: .success, text: "Apple's original “\(asset.name)” is back.")
-        } catch {
-            fail(error)
-        }
-        refreshAssets()
-    }
-
-    /// After a reset: accept Apple's video. Restoring from the backup also forgets our install record.
-    func keepApples(_ asset: AerialAsset) {
-        if store.hasBackup(asset) { restore(asset) } else { dismissedResetIDs.insert(asset.id) }
-    }
-
     // MARK: - Finder helpers
 
-    func revealBackups() {
-        let dir = store.backupsDir
-        NSWorkspace.shared.activateFileViewerSelecting([FileManager.default.fileExists(atPath: dir.path) ? dir : store.supportDir])
+    /// The manual check (⚙ menu, app menu): opens the release page when there is a newer version.
+    func checkForUpdates() {
+        Task {
+            do {
+                if let update = try await UpdateChecker.check(force: true) {
+                    availableUpdate = update
+                    NSWorkspace.shared.open(update.page)
+                } else if let version = UpdateChecker.currentVersion {
+                    notice = Notice(kind: .info, text: "AerialSwap \(version) is the latest version.")
+                }
+            } catch {
+                notice = Notice(kind: .error, text: "Couldn't check for updates: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func openUpdate() {
+        NSWorkspace.shared.open(availableUpdate?.page ?? UpdateChecker.releasesPage)
     }
 
     func openLog() {
@@ -1349,8 +1268,8 @@ final class AppModel {
         }
     }
 
-    /// After a successful install the transcode and any ffmpeg intermediate are no longer needed.
-    private func removeTempFilesAfterInstall() {
+    /// Once the video is in the library, the transcode and any ffmpeg intermediate are no longer needed.
+    private func removeTempFilesAfterSaving() {
         if let file = transcodedURL { try? FileManager.default.removeItem(at: file) }
         transcodedURL = nil
         if let converted = convertedTempURL {

@@ -78,7 +78,6 @@ private struct OptionsPanel: View {
     var body: some View {
         FitOrScroll(flat: model.isSnapshot) {
             VStack(alignment: .leading, spacing: 14) {
-                targetPicker
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Name in your library").font(.system(size: 12)).foregroundStyle(Theme.secondary)
                     TextField("Name", text: nameBinding)
@@ -108,7 +107,7 @@ private struct OptionsPanel: View {
                 Rectangle().fill(.white.opacity(0.14)).frame(height: 1)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(becomes).font(.system(size: 13)).fixedSize(horizontal: false, vertical: true)
-                    Text("Takes \(model.estimateText) · Apple's original is backed up")
+                    Text("Takes \(model.estimateText) · then in System Settings → Wallpaper → AerialSwap")
                         .font(.system(size: 12)).foregroundStyle(Theme.secondary)
                 }
                 Button("Set as Wallpaper") { model.confirmSetWallpaper = true }
@@ -125,36 +124,6 @@ private struct OptionsPanel: View {
             .padding(18)
         }
         .glassPanel(opacity: 0.7)
-    }
-
-    private var targetPicker: some View {
-        Menu {
-            ForEach(model.assets) { asset in
-                Button(asset.name) { model.selectedID = asset.id }
-            }
-        } label: {
-            HStack(spacing: 10) {
-                Thumb(image: model.selectedAsset.flatMap { model.thumbnails[$0.id] }, cornerRadius: 7)
-                    .frame(width: 56, height: 32)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Replaces").font(.system(size: 11)).foregroundStyle(Theme.secondary)
-                    Text(targetTitle).font(.system(size: 13, weight: .semibold)).lineLimit(1)
-                }
-                Spacer()
-                Image(systemName: "chevron.down").font(.system(size: 11, weight: .bold))
-            }
-            .padding(6)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color.white.opacity(0.08)))
-            .contentShape(Rectangle())
-        }
-        .menuStyle(.button)
-        .buttonStyle(.plain)
-        .menuIndicator(.hidden)
-    }
-
-    private var targetTitle: String {
-        guard let asset = model.selectedAsset else { return "Pick an Aerial" }
-        return model.roleTitle(for: asset.id).map { "\(asset.name) · \($0.lowercased())" } ?? asset.name
     }
 
     private var motion: some View {

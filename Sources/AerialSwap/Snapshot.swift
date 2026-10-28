@@ -19,32 +19,23 @@ enum Snapshot {
 
         let scenes: [(String, (AppModel) async -> Void)] = [
             ("01-intro", { $0.showIntro = true }),
-            ("02-now-playing", { m in m.showIntro = false; m.dismissedResetIDs = ["iceland"] }),
-            ("03-reset", { m in m.dismissedResetIDs = [] }),
-            ("04-library", { m in
-                m.dismissedResetIDs = ["iceland"]
-                m.section = .library
+            ("02-library", { m in
+                m.showIntro = false
                 m.selectedLibraryID = m.libraryItems[1].id
             }),
-            ("04b-library-playing", { m in m.selectedLibraryID = m.libraryItems[0].id }),   // already on Tahoe Day
+            ("04b-library-playing", { m in m.selectedLibraryID = m.libraryItems[0].id }),   // already on the desktop
             ("04c-discover", { m in
                 m.section = .discover
                 m.selectedDiscoverID = m.discoverVideos[2].id
             }),
             ("04d-url-import", { m in
-                m.section = .nowPlaying
+                m.section = .library
                 m.urlImportText = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
                 m.urlImportStart = "1:30"; m.urlImportEnd = "1:45"
                 m.showURLImport = true
             }),
-            ("04e-role-move", { m in
-                m.showURLImport = false
-                m.section = .nowPlaying
-                m.desktopID = "tahoe"; m.idleID = "tahoe"
-                m.roleMove = RoleMove(role: .screenSaver, fromID: "tahoe", choiceID: "sonoma")
-            }),
             ("05-configure", { m in
-                m.roleMove = nil; m.idleID = "sonoma"
+                m.showURLImport = false
                 await load(m, footage.appending(path: "scene_1080p30.mov"))
                 m.trimStart = min(2, m.trimEnd / 5); m.trimEnd *= 0.85
                 m.playhead = (m.trimStart + m.trimEnd) / 2
@@ -65,12 +56,12 @@ enum Snapshot {
             ("09-success", { m in
                 m.workFlow = nil; m.showsProgress = false; m.isBusy = false
                 m.sourceURL = nil; m.sourceInfo = nil
-                m.done = DoneInfo(assetID: "tahoe", assetName: "Tahoe Day", videoName: "Dolomites drone",
+                m.done = DoneInfo(assetID: "lib0", role: "Desktop & Screen Saver", videoName: "Dolomites drone",
                                   took: 114, summary: "60 fps · Smooth · Loop", savedToLibrary: true)
             }),
             ("10-toast", { m in
                 m.done = nil
-                m.notice = Notice(kind: .success, text: "Your video is back on “Iceland”.")
+                m.notice = Notice(kind: .success, text: "“Sonoma Horizon” is now your screen saver.")
             }),
         ]
         for (name, setup) in scenes {
@@ -110,32 +101,22 @@ enum Snapshot {
 
     private static func fill(_ model: AppModel, footage: URL) async {
         let date = Date.now.addingTimeInterval(-6 * 86_400)
-        let samples: [(id: String, name: String, file: String, status: AerialStatus)] = [
-            ("tahoe", "Tahoe Day", "scene_2160p30.mov", .replaced(sourceName: "Lofoten fjord", installedAt: date, protected: false)),
-            ("sonoma", "Sonoma Horizon", "src_2160p24.mov", .original),
-            ("iceland", "Iceland", "hdr_hlg2160.mov", .resetByMacOS),
-            ("hawaii", "Hawaii", "src_2160p60.mov", .original),
-            ("earth", "Africa & Middle East", "src_wide24.mov", .original),
+        // Apple's Aerials, plus the first library item as our group's wallpaper on the desktop.
+        let samples: [(id: String, name: String, file: String, own: Bool)] = [
+            ("lib0", "Lofoten fjord", "scene_2160p30.mov", true),
+            ("sonoma", "Sonoma Horizon", "src_2160p24.mov", false),
+            ("iceland", "Iceland", "hdr_hlg2160.mov", false),
+            ("hawaii", "Hawaii", "src_2160p60.mov", false),
+            ("earth", "Africa & Middle East", "src_wide24.mov", false),
         ]
         for s in samples {
             let url = footage.appending(path: s.file)
-            let asset = AerialAsset(id: s.id, name: s.name, manifestURL: nil, videoURL: url, thumbnailURL: url)
+            let asset = AerialAsset(id: s.id, name: s.name, manifestURL: nil, videoURL: url, thumbnailURL: url, isOwn: s.own)
             model.assets.append(asset)
-            model.statuses[s.id] = s.status
-            let thumb = await frame(url, large: false)
-            model.thumbnails[s.id] = thumb
-            model.appleThumbnails[s.id] = thumb
             model.backdrops[model.backdropKey(for: asset)] = await frame(url, large: true)
         }
-        model.installRecords["tahoe"] = InstallRecord(installedAt: date, installedSize: 1, sourceName: "Lofoten fjord",
-                                                      protected: false, libraryID: "lib0")
-        model.installRecords["iceland"] = InstallRecord(installedAt: date, installedSize: 1, sourceName: "Svalbard glacier",
-                                                        protected: false, libraryID: "lib3")
-        model.reinstallableIDs = ["iceland"]
-        model.backdrops["installed-iceland"] = await frame(footage.appending(path: "scene_720p30.mov"), large: true)
-        model.desktopID = "tahoe"
+        model.desktopID = "lib0"
         model.idleID = "sonoma"
-        model.selectedID = "tahoe"
 
         let items: [(String, String)] = [
             ("Lofoten fjord", "scene_2160p30.mov"), ("Patagonia ridge", "scene_1080p30.mov"),

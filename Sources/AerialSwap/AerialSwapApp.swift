@@ -7,7 +7,7 @@ import Synchronization
 enum Main {
     static func main() {
         let args = Array(CommandLine.arguments.dropFirst())
-        if args.first == "--transcode" || args.first == "--list" {
+        if ["--transcode", "--list", "--sync-group", "--remove-group"].contains(args.first ?? "") {
             Task { exit(await CLI.run(args)) }
             dispatchMain()
         }
@@ -30,6 +30,9 @@ struct AerialSwapApp: App {
         }
         .windowToolbarStyle(.unified(showsTitle: false))   // controls on the row of the traffic lights
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") { model.checkForUpdates() }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Add Video File…") { model.showImporter = true }
                     .keyboardShortcut("o")
@@ -48,18 +51,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
-/// Headless helpers for testing without the UI. Never touches the aerials folder.
+/// Headless helpers. --list and --transcode never touch the aerials folder; --sync-group (run by GroupWatcher's
+/// LaunchAgent) and --remove-group write the AerialSwap group (see AerialGroup).
 ///   AerialSwap --list
 ///   AerialSwap --transcode <in> <out.mov> [--fps auto|60|120|240] [--start s] [--end s] [--loop s] [--interpolate] [--enhance] [--freeze s]
+///   AerialSwap --sync-group
+///   AerialSwap --remove-group
 enum CLI {
     static func run(_ args: [String]) async -> Int32 {
         let store = AerialStore()
+        if args.first == "--sync-group" { return await syncGroup() }
+        if args.first == "--remove-group" {
+            do {
+                GroupWatcher.uninstall()
+                try await AerialGroup().remove()
+                print("AerialSwap group removed")
+                return 0
+            } catch {
+                print("error: \(error.localizedDescription)"); return 1
+            }
+        }
         if args.first == "--list" {
             do {
                 let selection = store.detectSelection()
                 print("Selected: desktop=\(selection.desktop ?? "-") idle=\(selection.idle ?? "-")")
                 for asset in try store.listAssets() {
-                    print("\(asset.id)  \(asset.name)  status=\(store.status(of: asset))  backup=\(store.hasBackup(asset))")
+                    print("\(asset.id)  \(asset.name)\(asset.isOwn ? "  (AerialSwap)" : "")")
                 }
                 return 0
             } catch {
@@ -68,7 +85,7 @@ enum CLI {
         }
 
         guard args.count >= 3 else {
-            print("usage: AerialSwap --transcode <in> <out.mov> [--fps auto|60|120|240] [--start s] [--end s] [--loop s] [--interpolate] [--enhance] [--freeze s]")
+            print("usage: AerialSwap --list | --sync-group | --remove-group | --transcode <in> <out.mov> [--fps auto|60|120|240] [--start s] [--end s] [--loop s] [--interpolate] [--enhance] [--freeze s]")
             return 2
         }
         var options = TranscodeOptions()
@@ -117,6 +134,31 @@ enum CLI {
             return 0
         } catch {
             print("error: \(error.localizedDescription)"); return 1
+        }
+    }
+}
+
+extension CLI {
+    /// Puts the group back after macOS replaced entries.json. If it had to do that 3 times within 10 minutes, something
+    /// keeps undoing it (e.g. a newer macOS that rejects the group), so it stops instead of restarting WallpaperAgent
+    /// over and over; opening the app syncs again.
+    static func syncGroup() async -> Int32 {
+        let defaults = UserDefaults.standard
+        let recent = (defaults.array(forKey: "groupSyncTimes") as? [Double] ?? []).filter { Date.now.timeIntervalSince1970 - $0 < 600 }
+        let items = WallpaperLibrary().load()
+        let group = AerialGroup()
+        if recent.count >= 3, !items.isEmpty, !group.isInstalled {
+            Log.error("Group: macOS removed the AerialSwap group 3 times in 10 minutes; not adding it again until AerialSwap is opened")
+            return 1
+        }
+        do {
+            if try await group.sync(items) {
+                defaults.set(recent + [Date.now.timeIntervalSince1970], forKey: "groupSyncTimes")
+            }
+            return 0
+        } catch {
+            Log.error("Group: \(error.localizedDescription)")
+            return 1
         }
     }
 }

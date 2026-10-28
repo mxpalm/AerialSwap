@@ -106,7 +106,6 @@ final class URLImporter: @unchecked Sendable {
         let helperArguments = (Tool.deno.location.map { ["--js-runtimes", "deno:\($0.path)"] } ?? [])
             + (Tool.ffmpeg.location.map { ["--ffmpeg-location", $0.path] } ?? [])
         p.arguments = sectionArguments + helperArguments + [
-            url.absoluteString,
             "--no-playlist", "--no-warnings", "--newline", "--progress",
             // Best video-only stream up to 4K (no audio, so nothing has to be merged), else the best combined one.
             "-f", "bv*[height<=2160]/b[height<=2160]/bv*/b",
@@ -114,6 +113,7 @@ final class URLImporter: @unchecked Sendable {
             "--progress-template", "download:PROGRESS %(progress.downloaded_bytes)s %(progress.total_bytes)s %(progress.total_bytes_estimate)s",
             "--print", "after_move:FILE %(filepath)s",
             "--print", "after_move:TITLE %(title)s",
+            "--", url.absoluteString,   // never read as an option
         ]
         // Homebrew's folders, so yt-dlp finds its helpers (deno for YouTube, ffmpeg) like in a terminal.
         var environment = ProcessInfo.processInfo.environment

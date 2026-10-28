@@ -116,7 +116,7 @@ private struct DiscoverPanel: View {
         .padding(.horizontal, 12)
         .frame(height: 34)
         .background(Capsule().fill(Color.white.opacity(0.1)))
-        .disabled(!model.pixabay.hasKey)
+        .disabled(!model.pixabay.isAvailable)
     }
 
     /// Topic chips; none is highlighted while a search is shown.
@@ -142,13 +142,13 @@ private struct DiscoverPanel: View {
         }
         .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .clipped()
-        .disabled(!model.pixabay.hasKey && !model.isSnapshot)
+        .disabled(!model.pixabay.isAvailable && !model.isSnapshot)
     }
 
     @ViewBuilder private var content: some View {
-        if !model.pixabay.hasKey && !model.isSnapshot {
-            message(icon: "key", title: "Pixabay key missing",
-                    text: "Discover needs a free Pixabay API key. Run\n"
+        if !model.pixabay.isAvailable && !model.isSnapshot {
+            message(icon: "key", title: "Discover isn't set up",
+                    text: "This build has no Discover proxy. To use your own free Pixabay API key, run\n"
                         + "defaults write local.aerialswap PixabayKey <key>\nand reopen AerialSwap.")
         } else if model.discoverVideos.isEmpty, let error = model.discoverError {
             message(icon: "wifi.exclamationmark", title: "Couldn't load videos", text: error) {
@@ -202,7 +202,7 @@ private struct DiscoverPanel: View {
             Button("Use This Video") { model.downloadSelectedDiscover() }
                 .buttonStyle(PillButtonStyle(kind: .primary, height: 44, fullWidth: true))
                 .disabled(model.selectedDiscoverVideo == nil || model.isBusy)
-                .keyboardShortcut(model.selectedDiscoverVideo != nil && model.done == nil && model.roleMove == nil ? .defaultAction : nil)
+                .keyboardShortcut(model.selectedDiscoverVideo != nil && model.done == nil ? .defaultAction : nil)
             Text(footerCaption).font(.system(size: 12)).foregroundStyle(Theme.secondary)
         }
         .padding(.top, 12)

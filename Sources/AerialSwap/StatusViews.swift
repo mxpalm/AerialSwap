@@ -12,13 +12,13 @@ struct WorkingView: View {
         case .tools: [(.download, "Install from \(model.downloadSource)")]
         case .convert: [(.convert, "Convert with ffmpeg")]
         case .saveOnly: [(.prepare, "Prepare 4K"), (.save, "Save to library")]
-        default: [(.prepare, "Prepare 4K"), (.save, "Save to library"), (.install, "Install")]
+        default: [(.prepare, "Prepare 4K"), (.save, "Save to library"), (.show, "Set as wallpaper")]
         }
     }
 
     var body: some View {
         ZStack {
-            Backdrop(image: model.backdrops["source"] ?? model.selectedAsset.flatMap { model.backdrops[model.backdropKey(for: $0)] },
+            Backdrop(image: model.backdrops["source"] ?? model.desktopAsset.flatMap { model.backdrops[model.backdropKey(for: $0)] },
                      blur: 28, scrim: .dark)
             VStack(spacing: 0) {
                 Spacer()
@@ -47,7 +47,7 @@ struct WorkingView: View {
                 TitleCapsule(title: model.displayName ?? "")
             } else {
                 TitleCapsule(title: model.displayName ?? "",
-                             detail: model.workFlow == .saveOnly ? "→ Library" : model.selectedAsset.map { "→ \($0.name)" })
+                             detail: model.workFlow == .saveOnly ? "→ Library" : "→ Wallpaper")
             }
         } trailing: { EmptyView() }
     }
@@ -115,12 +115,12 @@ struct WorkingView: View {
         case .prepare:
             let motion = model.interpolates ? "Generating in-between frames for smooth \(model.outputFPS) fps motion. "
                 : "Encoding 4K HEVC with the frame layers macOS needs. "
-            let tail = model.workFlow == .saveOnly ? "No Aerial is changed." : "Keep working — nothing changes on your Mac until the last step."
+            let tail = model.workFlow == .saveOnly ? "Your wallpaper stays as it is." : "Keep working — nothing changes on your Mac until the last step."
             return motion + tail
         case .save:
             return "Keeping it in your library, so switching back later takes seconds."
-        case .install:
-            return "Backing up Apple's original and swapping the file."
+        case .show:
+            return "Adding it to the AerialSwap group and switching your desktop and screen saver to it."
         }
     }
 }
@@ -251,7 +251,7 @@ struct URLImportDialog: View {
     }
 }
 
-/// After an install: what now plays where, over Now Playing.
+/// After Set as Wallpaper: what now plays where, over the Library.
 struct SuccessDialog: View {
     @Bindable var model: AppModel
     let done: DoneInfo
@@ -267,7 +267,7 @@ struct SuccessDialog: View {
                         .background(Circle().fill(Theme.successFill))
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("\(done.assetName) now plays \(prettyName(done.videoName))")
+                        Text(title)
                             .font(.system(size: 20, weight: .bold))
                             .lineLimit(3)
                             .fixedSize(horizontal: false, vertical: true)
@@ -282,7 +282,7 @@ struct SuccessDialog: View {
                         }
                     }
                 }
-                Text("Not seeing it? Make sure \(done.assetName) is selected in System Settings → Wallpaper.")
+                Text(hint)
                     .font(.system(size: 12)).foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 10) {
@@ -300,140 +300,22 @@ struct SuccessDialog: View {
         .onExitCommand { model.finishDone() }
     }
 
+    private var title: String {
+        if done.role.isEmpty { return "\(prettyName(done.videoName)) is in the AerialSwap group" }
+        return "\(done.role) now plays \(prettyName(done.videoName))"
+    }
+
+    private var hint: String {
+        if done.role.isEmpty {
+            return "Your desktop doesn't show an Aerial right now, so pick it yourself: System Settings → Wallpaper → AerialSwap."
+        }
+        return "It's in System Settings → Wallpaper → AerialSwap, next to Apple's Aerials."
+    }
+
     private var subtitle: String {
         guard let took = done.took else { return "Lock your Mac to see it." }
         let time = took < 90 ? "\(Int(took.rounded())) s" : "\(Int(took / 60)) min \(Int(took.truncatingRemainder(dividingBy: 60))) s"
         return "Took \(time). Lock your Mac to see it."
-    }
-}
-
-/// Taking Desktop or Screen Saver away from an Aerial: pick the Aerial that takes over.
-struct RoleMoveDialog: View {
-    @Bindable var model: AppModel
-    let move: RoleMove
-
-    private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
-    private var roleName: String { move.role == .desktop ? "desktop" : "screen saver" }
-    private var from: AerialAsset? { model.assets.first { $0.id == move.fromID } }
-    private var others: [AerialAsset] { model.assets.filter { $0.id != move.fromID } }
-
-    var body: some View {
-        DialogContainer {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Which Aerial should be your \(roleName)?").font(.system(size: 22, weight: .bold))
-                    Text(subtitle).font(.system(size: 14)).foregroundStyle(Theme.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if others.isEmpty {
-                    Text("There's no other Aerial on this Mac yet. Download one in System Settings → Wallpaper first.")
-                        .font(.system(size: 13)).foregroundStyle(Theme.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    FitOrScroll(.vertical, flat: model.isSnapshot) {
-                        LazyVGrid(columns: columns, spacing: 12) {
-                            ForEach(others) { asset in tile(asset) }
-                        }
-                        .padding(3)
-                    }
-                    .frame(maxHeight: 300)
-                }
-                HStack(spacing: 10) {
-                    if others.isEmpty {
-                        Button("Open Wallpaper Settings") { model.openWallpaperSettings() }
-                            .buttonStyle(PillButtonStyle(kind: .secondary, height: 40))
-                            .fixedSize()
-                    }
-                    Spacer()
-                    Button("Cancel") { model.roleMove = nil }
-                        .buttonStyle(PillButtonStyle(kind: .secondary, height: 40))
-                        .fixedSize()
-                        .keyboardShortcut(.cancelAction)
-                    if !others.isEmpty {
-                        Button(move.role == .desktop ? "Use as Desktop" : "Use as Screen Saver") { model.finishRoleMove() }
-                            .buttonStyle(PillButtonStyle(kind: .primary, height: 40))
-                            .fixedSize()
-                            .keyboardShortcut(.defaultAction)
-                            .disabled(move.choiceID == nil)
-                    }
-                }
-            }
-        }
-    }
-
-    private var subtitle: String {
-        guard let from else { return "" }
-        if move.role == .screenSaver, from.id == model.desktopID { return "\(from.name) stays your desktop." }
-        if move.role == .desktop, from.id == model.idleID { return "\(from.name) stays your screen saver." }
-        return "\(from.name) will no longer be used."
-    }
-
-    private func tile(_ asset: AerialAsset) -> some View {
-        let isOn = move.choiceID == asset.id
-        return Button { model.roleMove?.choiceID = asset.id } label: {
-            VStack(alignment: .leading, spacing: 5) {
-                Thumb(image: model.thumbnails[asset.id], cornerRadius: 9)
-                    .aspectRatio(16 / 9, contentMode: .fit)
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .strokeBorder(isOn ? Theme.accent : .white.opacity(0.12), lineWidth: isOn ? 2.5 : 1)
-                    }
-                Text(asset.name).font(.system(size: 12, weight: .semibold)).lineLimit(1)
-                Text(model.roleTitle(for: asset.id) ?? " ").font(.system(size: 11)).foregroundStyle(Theme.secondary).lineLimit(1)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(isOn ? .isSelected : [])
-    }
-}
-
-/// macOS replaced the user's video with Apple's again (usually after an update).
-struct ResetDialog: View {
-    @Bindable var model: AppModel
-    let asset: AerialAsset
-
-    var body: some View {
-        DialogContainer {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(spacing: 14) {
-                    frame(model.backdrops[model.backdropKey(for: asset)] ?? model.appleThumbnails[asset.id],
-                          caption: "Now: Apple's \(asset.name)", highlighted: false)
-                    Image(systemName: "arrow.right").font(.system(size: 18, weight: .semibold))
-                        .foregroundStyle(Theme.secondary).accessibilityHidden(true)
-                    frame(model.backdrops["installed-\(asset.id)"],
-                          caption: "Yours: \(model.installRecords[asset.id].map { prettyName($0.sourceName) } ?? "your video")",
-                          highlighted: true)
-                }
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("macOS put Apple's video back").font(.system(size: 22, weight: .bold))
-                    Text("This usually happens after a macOS update. Your video is still saved, so putting it back on "
-                         + "\(asset.name) takes a few seconds — no conversion.")
-                        .font(.system(size: 14)).foregroundStyle(Theme.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                HStack(spacing: 10) {
-                    Button("Reinstall My Video") { model.reinstall(asset) }
-                        .buttonStyle(PillButtonStyle(kind: .primary, height: 42, fullWidth: true))
-                        .keyboardShortcut(.defaultAction)
-                    Button("Keep Apple's") { model.keepApples(asset) }
-                        .buttonStyle(PillButtonStyle(kind: .secondary, height: 42, fullWidth: true))
-                    Button("Not Now") { model.dismissedResetIDs.insert(asset.id) }
-                        .buttonStyle(PillButtonStyle(kind: .quiet, height: 42))
-                        .keyboardShortcut(.cancelAction)
-                }
-            }
-        }
-    }
-
-    private func frame(_ image: NSImage?, caption: String, highlighted: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Thumb(image: image, cornerRadius: 12)
-                .aspectRatio(16 / 9, contentMode: .fit)
-                .overlay { if highlighted { RoundedRectangle(cornerRadius: 12).strokeBorder(Theme.accent, lineWidth: 2.5) } }
-            Text(caption).font(.system(size: 12, weight: highlighted ? .semibold : .regular))
-                .foregroundStyle(highlighted ? .white : Theme.secondary).lineLimit(1)
-        }
     }
 }
 
@@ -537,7 +419,7 @@ struct LowResolutionDialog: View {
 
 // MARK: - Small overlays
 
-/// Quick installs (from the library, reinstall) take seconds; no full screen for those.
+/// Quick switches (a library wallpaper, Use For) take seconds; no full screen for those.
 struct QuickBusyOverlay: View {
     let phase: String
 

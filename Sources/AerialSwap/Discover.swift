@@ -44,6 +44,18 @@ struct DiscoverVideo: Codable, Identifiable, Hashable, Sendable {
     }
 
     var credit: String { "\(user) on Pixabay" }
+
+    /// Every address in the result is https on pixabay.com (or a subdomain, e.g. its CDN). Results from the proxy or
+    /// the cache that aren't are dropped, so the app never downloads from or opens anything else.
+    var isFromPixabay: Bool {
+        let files = [videos.large, videos.medium, videos.small, videos.tiny].compactMap { $0 }
+        let addresses = [pageURL] + files.flatMap { [$0.url, $0.thumbnail ?? ""] }
+        return addresses.allSatisfy { address in
+            guard !address.isEmpty else { return true }
+            guard let url = URL(string: address), url.scheme == "https", let host = url.host()?.lowercased() else { return false }
+            return host == "pixabay.com" || host.hasSuffix(".pixabay.com")
+        }
+    }
 }
 
 /// A row of the topic picker: a curated search that tends to give calm, wallpaper-like footage.
@@ -74,7 +86,7 @@ enum DiscoverError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .noKey: "Discover needs a Pixabay API key. See the README (Discover) for where to put it."
+        case .noKey: "Discover isn't set up in this build: it needs a Pixabay API key or the Discover proxy. See the README (Discover)."
         case .badKey: "Pixabay didn't accept the API key."
         case .rateLimited: "Pixabay is busy right now. Try again in a minute."
         case .http(let code): "Pixabay answered with an error (HTTP \(code)). Try again later."
@@ -83,8 +95,9 @@ enum DiscoverError: LocalizedError {
     }
 }
 
-/// Pixabay's video search (https://pixabay.com/api/docs/). Pixabay asks that results are cached for 24 hours,
-/// so every response is kept in ~/Library/Caches/AerialSwap/discover and reused until it is a day old.
+/// Pixabay's video search (https://pixabay.com/api/docs/), directly with an API key, or through AerialSwap's
+/// Discover proxy (Proxy/), which adds the key so release builds don't carry one. Pixabay asks that results are
+/// cached for 24 hours, so every response is kept in ~/Library/Caches/AerialSwap/discover and reused until it is a day old.
 /// When Pixabay can't be reached, older cached results are shown instead of an error.
 struct PixabayClient: Sendable {
     static let homepage = URL(string: "https://pixabay.com/")!
@@ -95,14 +108,20 @@ struct PixabayClient: Sendable {
     struct Page: Codable, Sendable {
         var totalHits: Int
         var hits: [DiscoverVideo]
+
+        var trusted: Page { Page(totalHits: totalHits, hits: hits.filter(\.isFromPixabay)) }
     }
 
     let key: String?
+    /// The Discover proxy (DiscoverProxyURL in Info.plist, from Resources/discover-proxy.url via build.sh);
+    /// used when there is no key of our own.
+    let proxy: URL?
     let cacheDir = FileManager.default.homeDirectoryForCurrentUser
         .appending(path: "Library/Caches/AerialSwap/discover")
 
     /// The key comes from (first match): `defaults write local.aerialswap PixabayKey <key>`, the PIXABAY_KEY
     /// environment variable, or pixabay.key in the app bundle (build.sh copies Resources/pixabay.key).
+    /// Without one, searches go through the proxy.
     init() {
         let candidates = [
             UserDefaults.standard.string(forKey: "PixabayKey"),
@@ -112,13 +131,15 @@ struct PixabayClient: Sendable {
         key = candidates.lazy
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first { !$0.isEmpty }
+        proxy = (Bundle.main.object(forInfoDictionaryKey: "DiscoverProxyURL") as? String)
+            .flatMap { URL(string: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
     }
 
-    var hasKey: Bool { key != nil }
+    var isAvailable: Bool { key != nil || proxy != nil }
 
     /// Landscape-friendly real footage, at least 1080p, most popular first.
     func search(_ query: String, editorsChoice: Bool = false, page: Int = 1) async throws -> Page {
-        guard let key else { throw DiscoverError.noKey }
+        guard isAvailable else { throw DiscoverError.noKey }
         var items = [
             URLQueryItem(name: "q", value: String(query.prefix(100))),
             URLQueryItem(name: "video_type", value: "film"),
@@ -132,27 +153,33 @@ struct PixabayClient: Sendable {
         var components = URLComponents(string: "https://pixabay.com/api/videos/")!
         components.queryItems = items
         let cacheFile = cacheDir.appending(path: Self.cacheName(for: components.url!.absoluteString) + ".json")
-        components.queryItems = [URLQueryItem(name: "key", value: key)] + items
+        if let key {
+            components.queryItems = [URLQueryItem(name: "key", value: key)] + items
+        } else if let proxy, var viaProxy = URLComponents(url: proxy.appending(path: "videos"), resolvingAgainstBaseURL: false) {
+            viaProxy.queryItems = items
+            components = viaProxy
+        }
 
-        if let cached = readCache(cacheFile, maxAge: Self.cacheLifetime) { return cached }
+        if let cached = readCache(cacheFile, maxAge: Self.cacheLifetime) { return cached.trusted }
         do {
             let (data, response) = try await URLSession.shared.data(from: components.url!)
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             switch status {
             case 200: break
             case 429: throw DiscoverError.rateLimited
-            case 400 where String(decoding: data, as: UTF8.self).localizedCaseInsensitiveContains("key"): throw DiscoverError.badKey
+            case 400 where key != nil && String(decoding: data, as: UTF8.self).localizedCaseInsensitiveContains("key"):
+                throw DiscoverError.badKey
             default: throw DiscoverError.http(status)
             }
             let page = try JSONDecoder().decode(Page.self, from: data)
             try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
             try? data.write(to: cacheFile, options: .atomic)
-            return page
+            return page.trusted
         } catch {
             if case DiscoverError.badKey = error { throw error }
             if let stale = readCache(cacheFile, maxAge: .infinity) {
                 Log.info("Discover: Pixabay unavailable (\(error.localizedDescription)), showing cached results")
-                return stale
+                return stale.trusted
             }
             throw error
         }

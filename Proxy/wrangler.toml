@@ -1,0 +1,20 @@
+# Cloudflare Worker for AerialSwap's Discover (see README.md in this folder).
+name = "aerialswap-discover"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+# 24-hour cache of Pixabay responses. Create it once with
+#   npx wrangler kv namespace create CACHE
+# and paste the id it prints here.
+[[kv_namespaces]]
+binding = "CACHE"
+id = "PASTE_KV_NAMESPACE_ID_HERE"
+
+# Uncached searches per IP: 30 a minute (per Cloudflare location). namespace_id is any number unique in your account.
+[[ratelimits]]
+name = "LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 30
+  period = 60

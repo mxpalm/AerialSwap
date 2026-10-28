@@ -27,7 +27,6 @@ struct ContentView: View {
         .animation(animation(.snappy(duration: 0.2)), value: model.section)
         .animation(animation(.snappy(duration: 0.2)), value: model.notice)
         .animation(animation(.snappy(duration: 0.2)), value: model.done)
-        .animation(animation(.snappy(duration: 0.2)), value: model.roleMove)
         .animation(animation(.snappy(duration: 0.2)), value: model.showURLImport)
         .onAppear {
             model.refreshAssets()
@@ -52,16 +51,10 @@ struct ContentView: View {
         } message: {
             Text(confirmText)
         }
-        .confirmationDialog("Restore Apple's original?", isPresented: restoreBinding) {
-            Button("Restore Original") { if let a = model.restoreCandidate { model.restore(a) } }
-        } message: {
-            Text("“\(model.restoreCandidate?.name ?? "")” will play Apple's video again. Your video stays in the library.")
-        }
         .confirmationDialog("Delete from your library?", isPresented: deleteBinding) {
             Button("Delete", role: .destructive) { if let item = model.deleteCandidate { model.deleteLibraryItem(item) } }
         } message: {
-            Text("“\(prettyName(model.deleteCandidate?.name ?? ""))” will be removed from your library. "
-                 + "The wallpaper currently on your screen is not affected.")
+            Text(deleteText)
         }
         .alert("Install helpers?", isPresented: toolInstallBinding) {
             Button("Install") { model.installTools() }
@@ -90,14 +83,8 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var overlays: some View {
-        if model.screen == .home, model.done == nil, model.roleMove == nil, let asset = model.resetAlertAsset, !model.isBusy {
-            ResetDialog(model: model, asset: asset)
-        }
         if model.screen == .configure, model.showResolutionAlert, let hint = model.resolutionHint {
             LowResolutionDialog(model: model, text: hint.text)
-        }
-        if model.screen == .home, let move = model.roleMove {
-            RoleMoveDialog(model: model, move: move)
         }
         if model.screen == .home, let done = model.done {
             SuccessDialog(model: model, done: done)
@@ -117,20 +104,25 @@ struct ContentView: View {
     }
 
     private var confirmText: String {
-        let target = model.selectedAsset?.name ?? ""
+        let systemWarning = AerialStore.untestedSystemWarning.map { "\n\n\($0)" } ?? ""
+        let place = "It's shown on your desktop and screen saver, and you'll find it in System Settings → Wallpaper → AerialSwap."
         if model.isUsingLibrary, let item = model.selectedLibraryItem {
-            return "“\(target)” will play “\(prettyName(item.name))” from your library. It's already prepared, "
-                + "so this only takes a few seconds."
+            return "“\(prettyName(item.name))” from your library becomes your wallpaper. \(place)" + systemWarning
         }
         let video = model.displayName ?? ""
         var warning = model.enhances ? "\n\nEnhance detail: \(model.enhanceWarning)" : ""
         if let hint = model.resolutionHint, hint.severe { warning += "\n\n\(hint.text)" }
-        return "“\(target)” will play “\(video)”.\n\nPreparing the video takes \(model.estimateText). "
-            + "Apple's original is backed up first and can be restored at any time." + warning
+        return "“\(video)” becomes your wallpaper. \(place)\n\nPreparing the video takes \(model.estimateText)."
+            + warning + systemWarning
     }
 
-    private var restoreBinding: Binding<Bool> {
-        Binding(get: { model.restoreCandidate != nil }, set: { if !$0 { model.restoreCandidate = nil } })
+    private var deleteText: String {
+        guard let item = model.deleteCandidate else { return "" }
+        let removed = "“\(prettyName(item.name))” will be removed from your library and the AerialSwap group."
+        if let role = model.roleTitle(for: item.id) {
+            return removed + " It's your \(role.lowercased()) right now, so macOS will show something else there."
+        }
+        return removed
     }
 
     private var deleteBinding: Binding<Bool> {
@@ -150,13 +142,12 @@ struct ContentView: View {
 
 // MARK: - Shared chrome
 
-/// Now Playing | Library | Discover, centered in the top bar.
+/// Library | Discover, centered in the top bar.
 struct SectionSwitcher: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        PillPicker(options: [.init(value: HomeSection.nowPlaying, title: "Now Playing"), .init(value: .library, title: "Library"),
-                             .init(value: .discover, title: "Discover")],
+        PillPicker(options: [.init(value: HomeSection.library, title: "Library"), .init(value: .discover, title: "Discover")],
                    selection: Binding(get: { model.section },
                                       set: { if $0 == .discover { model.openDiscover() } else { model.section = $0 } }),
                    label: "Section")
@@ -173,10 +164,15 @@ struct TopBarActions: View {
         AddVideoMenu(model: model, kind: .primary, height: 32)
 
         Menu {
+            if let update = model.availableUpdate {
+                Button("Download AerialSwap \(update.version)…") { model.openUpdate() }
+                Divider()
+            }
+            Button("Open Wallpaper Settings") { model.openWallpaperSettings() }
             Button("Show Library in Finder") { model.revealLibrary() }
-            Button("Show Backups in Finder") { model.revealBackups() }
             Button("Open Log") { model.openLog() }
             Divider()
+            Button("Check for Updates…") { model.checkForUpdates() }
             Button("Show Welcome Screen") { model.showIntroAgain() }
         } label: {
             Image(systemName: "gearshape")

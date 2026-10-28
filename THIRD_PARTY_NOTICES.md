@@ -23,8 +23,9 @@ When you agree to install helpers, AerialSwap runs Homebrew or downloads the off
   not who searched.
   The videos are under the [Pixabay Content License](https://pixabay.com/service/license-summary/).
   AerialSwap keeps each video's credit ("<user> on Pixabay") in the library.
-- **GitHub** (update check): AerialSwap asks the GitHub API at most once a day for the latest release of
-  this repository. Nothing about you or your Mac is sent beyond a normal HTTPS request.
+- **GitHub** (updates): AerialSwap asks the GitHub API at most once a day for the latest release of
+  this repository, and downloads it from there when you choose **Update**. Nothing about you or your Mac is sent
+  beyond a normal HTTPS request.
 
 ## Content you add
 

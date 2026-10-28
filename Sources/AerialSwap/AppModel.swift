@@ -267,7 +267,8 @@ final class AppModel {
             guard let update = try? await UpdateChecker.check() else { return }
             availableUpdate = update
             if notice == nil {
-                notice = Notice(kind: .info, text: "AerialSwap \(update.version) is available. Get it from the ⚙ menu.")
+                notice = Notice(kind: .info, text: "AerialSwap \(update.version) is available. "
+                                + (canInstallUpdate ? "Update from the ⚙ menu." : "Get it from the ⚙ menu."))
             }
         }
         let center = NotificationCenter.default
@@ -1226,13 +1227,18 @@ final class AppModel {
 
     // MARK: - Finder helpers
 
-    /// The manual check (⚙ menu, app menu): opens the release page when there is a newer version.
+    /// The manual check (⚙ menu, app menu): offers the update when there is a newer version (or opens the release
+    /// page when it can't be installed from here).
     func checkForUpdates() {
         Task {
             do {
                 if let update = try await UpdateChecker.check(force: true) {
                     availableUpdate = update
-                    NSWorkspace.shared.open(update.page)
+                    if canInstallUpdate {
+                        notice = Notice(kind: .info, text: "AerialSwap \(update.version) is available. Update from the ⚙ menu.")
+                    } else {
+                        NSWorkspace.shared.open(update.page)
+                    }
                 } else if let version = UpdateChecker.currentVersion {
                     notice = Notice(kind: .info, text: "AerialSwap \(version) is the latest version.")
                 }
@@ -1244,6 +1250,30 @@ final class AppModel {
 
     func openUpdate() {
         NSWorkspace.shared.open(availableUpdate?.page ?? UpdateChecker.releasesPage)
+    }
+
+    /// The available update can be installed right here (it has a signed zip and this copy can be replaced).
+    var canInstallUpdate: Bool { availableUpdate?.zip != nil && availableUpdate?.signature != nil && Updater.canInstall }
+
+    /// Downloads, checks and installs the update, then relaunches. Falls back to the release page when that fails.
+    func installUpdate() {
+        guard let update = availableUpdate, let zip = update.zip, let signature = update.signature, Updater.canInstall else {
+            openUpdate(); return
+        }
+        guard !isBusy else { return }
+        isBusy = true; workFlow = .quick; phase = "Updating to AerialSwap \(update.version)"; notice = nil
+        Task {
+            do {
+                let app = try await Updater.install(zip: zip, signature: signature)
+                Updater.relaunch(app)
+            } catch {
+                Log.error("Update failed: \(error.localizedDescription)")
+                stopProgress()
+                notice = Notice(kind: .error, text: "Couldn't update: \(error.localizedDescription) "
+                                + "You can download it from the ⚙ menu instead.")
+                availableUpdate?.zip = nil   // the ⚙ menu now offers the download page
+            }
+        }
     }
 
     func openLog() {

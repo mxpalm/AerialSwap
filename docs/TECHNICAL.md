@@ -131,6 +131,7 @@ AerialSwap.app/Contents/MacOS/AerialSwap --transcode in.mp4 out.mov [--fps auto|
 AerialSwap.app/Contents/MacOS/AerialSwap --snapshot outDir [TestFootage]   # renders every screen to PNGs with sample data
 AerialSwap.app/Contents/MacOS/AerialSwap --sync-group     # brings the AerialSwap group in line with the library
 AerialSwap.app/Contents/MacOS/AerialSwap --remove-group   # removes the group and its LaunchAgent, puts Apple's manifest back
+AerialSwap.app/Contents/MacOS/AerialSwap --install-update <zip URL> <signature URL>   # Updater on this copy, no relaunch
 ```
 
 ## How it works (findings from macOS 27.0.1)
@@ -273,17 +274,45 @@ killall WallpaperAerialsExtension WallpaperAgent
    git tag v1.1
    ./build.sh --zip
    ```
-2. Publish `AerialSwap-1.1.zip` as a GitHub release for tag `v1.1`, e.g.
-   `gh release create v1.1 AerialSwap-1.1.zip`.
+   This also writes `AerialSwap-1.1.zip.sig`, the zip's signature with the release key (see below).
+2. Publish both as a GitHub release for tag `v1.1`, e.g.
+   `gh release create v1.1 AerialSwap-1.1.zip AerialSwap-1.1.zip.sig`.
 
 Once a day the app asks GitHub for the latest release of `mxpalm/AerialSwap`. When a newer one exists, it
-shows a notice and a **Download AerialSwap x.y…** item in the ⚙ menu. **Check for Updates…** (⚙ menu and
+shows a notice and an **Update to AerialSwap x.y** item in the ⚙ menu. **Check for Updates…** (⚙ menu and
 the app menu) checks right away. The check only works while the repository is public; a private repo or a
 repo without releases finds nothing.
 
+**Update to AerialSwap x.y** (`Updater.swift`) downloads `AerialSwap-x.y.zip` and `AerialSwap-x.y.zip.sig` from
+the release, and installs only when all of these hold:
+- the signature is valid for the zip with the release key's public key, built into the app
+  (`Updater.releasePublicKey`, Ed25519);
+- the zip holds an `AerialSwap.app` with the same bundle ID and a newer version (no downgrades);
+- `codesign --verify --deep --strict` accepts it.
+
+It then replaces the running app in place (`FileManager.replaceItemAt`), and reopens it once the old process has
+exited. Files the app downloads itself get no quarantine flag, so macOS doesn't ask again. Tested on macOS 27.2 with
+an ad-hoc signed app that had been approved with Open Anyway: no App Management prompt. A copy that runs
+translocated (opened straight from Downloads) or sits in a folder this user can't write to can't replace itself:
+the menu then offers **Download AerialSwap x.y…** (the release page) instead, as it does for a release without
+a `.sig`. To try the install path on a copy without a release:
+`AerialSwap.app/Contents/MacOS/AerialSwap --install-update <zip URL> <signature URL>` (`file://` URLs work).
+
+**The release key.** The private key is in the login Keychain as "AerialSwap release key", and
+`Tools/release_key.swift` signs with it. `./build.sh --zip` stops if it's missing. Keep a backup (Keychain Access →
+search "AerialSwap release key" → Show password, into a password manager): without it, no release can be
+installed from the app any more, and every user would have to download a version with a new key by hand. To set up
+a new key (that also means a new `Updater.releasePublicKey` and one manual update for everyone):
+
+```sh
+swiftc -O -o .build/release_key Tools/release_key.swift
+security add-generic-password -s "AerialSwap release key" -a AerialSwap -w "$(.build/release_key generate)"
+security find-generic-password -s "AerialSwap release key" -w | .build/release_key public   # -> Updater.releasePublicKey
+```
+
 By default the app is ad-hoc signed, not with a Developer ID, so macOS blocks a downloaded copy on first open.
-To open it, try once, then go to System Settings → Privacy & Security and click **Open Anyway**. An update is a
-manual download: quit AerialSwap, replace the app in `/Applications`, open it the same way.
+To open it, try once, then go to System Settings → Privacy & Security and click **Open Anyway**. Updates installed
+from the app don't need that again.
 
 With an Apple Developer account, `build.sh` signs with your Developer ID and the hardened runtime instead, and
 `--zip` notarizes and staples the app, so it opens without the warning:

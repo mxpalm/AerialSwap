@@ -14,3 +14,4 @@ Resources/pixabay.key
 # Cloudflare Worker tooling (Proxy/)
 Proxy/.wrangler/
 Proxy/node_modules/
+AerialSwap-*.zip.sig

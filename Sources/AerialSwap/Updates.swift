@@ -4,11 +4,14 @@ import Foundation
 struct AppUpdate: Equatable, Sendable {
     var version: String
     var page: URL
+    /// The release zip and its signature (`<zip>.sig`), when the release has both; Updater installs from them.
+    var zip: URL?
+    var signature: URL?
 }
 
 /// Looks for a newer release of AerialSwap on GitHub (https://github.com/mxpalm/AerialSwap/releases).
-/// It only tells the user; downloading and replacing the app stays manual, as the app isn't signed with a
-/// Developer ID. Checks at most once a day unless asked; a repo without releases (or a private one) finds nothing.
+/// Updater installs it when the release has a signed zip; otherwise the user downloads it from the release page.
+/// Checks at most once a day unless asked; a repo without releases (or a private one) finds nothing.
 enum UpdateChecker {
     static let releasesPage = URL(string: "https://github.com/mxpalm/AerialSwap/releases")!
     private static let latestRelease = URL(string: "https://api.github.com/repos/mxpalm/AerialSwap/releases/latest")!
@@ -41,7 +44,15 @@ enum UpdateChecker {
             guard isVersion(latest, newerThan: current) else { return nil }
             // Only ever opens a GitHub page.
             let page = URL(string: release.html_url).flatMap { $0.scheme == "https" && $0.host() == "github.com" ? $0 : nil }
-            return AppUpdate(version: latest, page: page ?? releasesPage)
+            // The zip and its signature, only from this repository's release downloads.
+            func asset(_ name: String) -> URL? {
+                release.assets?.first { $0.name == name }.flatMap { URL(string: $0.browser_download_url) }.flatMap {
+                    $0.scheme == "https" && $0.host() == "github.com"
+                        && $0.path().hasPrefix("/mxpalm/AerialSwap/releases/download/") ? $0 : nil
+                }
+            }
+            let zipName = "AerialSwap-\(latest).zip"
+            return AppUpdate(version: latest, page: page ?? releasesPage, zip: asset(zipName), signature: asset(zipName + ".sig"))
         } catch {
             Log.error("Update check failed: \(error.localizedDescription)")
             if force { throw error }
@@ -63,6 +74,12 @@ enum UpdateChecker {
     private struct Release: Decodable {
         var tag_name: String
         var html_url: String
+        var assets: [Asset]?
+    }
+
+    private struct Asset: Decodable {
+        var name: String
+        var browser_download_url: String
     }
 }
 

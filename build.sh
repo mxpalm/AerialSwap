@@ -3,7 +3,7 @@
 #   ./build.sh            build ./AerialSwap.app
 #   ./build.sh --install  build and move it to /Applications (keeps a single copy)
 #   ./build.sh --test     build ./AerialSwap.app as a test copy and open it (leaves the LaunchAgent on /Applications)
-#   ./build.sh --zip      build and pack AerialSwap-<version>.zip for a GitHub release
+#   ./build.sh --zip      build and pack AerialSwap-<version>.zip (+ .sig, for in-app updates) for a GitHub release
 # With SIGN_IDENTITY="Developer ID Application: …" it's signed with that identity and the hardened runtime instead of
 # ad-hoc; --zip then also notarizes and staples it when NOTARY_PROFILE names a `notarytool store-credentials` profile.
 # The version is the latest git tag (v1.2 -> 1.2), the build number the commit count.
@@ -88,7 +88,16 @@ if $ZIP; then
     elif [[ -n "${SIGN_IDENTITY:-}" ]]; then
         echo "Note: signed but not notarized (set NOTARY_PROFILE); Gatekeeper still blocks it on first open." >&2
     fi
-    echo "Packed $(pwd)/$ZIPFILE (version $VERSION, build $BUILD)"
+    # The app installs updates only with a valid signature from the release key (Updater.swift); the key is in the
+    # Keychain as "AerialSwap release key" (see docs/TECHNICAL.md, "Releases and updates").
+    if ! RELEASE_KEY="$(security find-generic-password -s "AerialSwap release key" -w 2>/dev/null)"; then
+        echo "No \"AerialSwap release key\" in the Keychain, so $ZIPFILE can't be signed for in-app updates." >&2
+        exit 1
+    fi
+    swiftc -O -o .build/release_key Tools/release_key.swift
+    print -r -- "$RELEASE_KEY" | .build/release_key sign "$ZIPFILE" > "$ZIPFILE.sig"
+    unset RELEASE_KEY
+    echo "Packed $(pwd)/$ZIPFILE and $ZIPFILE.sig (version $VERSION, build $BUILD)"
     exit 0
 fi
 

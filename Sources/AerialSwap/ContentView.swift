@@ -165,7 +165,12 @@ struct TopBarActions: View {
 
         Menu {
             if let update = model.availableUpdate {
-                Button("Download AerialSwap \(update.version)…") { model.openUpdate() }
+                if model.canInstallUpdate {
+                    Button("Update to AerialSwap \(update.version)") { model.installUpdate() }
+                        .disabled(model.isBusy)
+                } else {
+                    Button("Download AerialSwap \(update.version)…") { model.openUpdate() }
+                }
                 Divider()
             }
             Button("Open Wallpaper Settings") { model.openWallpaperSettings() }

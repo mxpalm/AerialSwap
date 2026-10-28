@@ -116,8 +116,10 @@ Usually yes, but AerialSwap uses parts of macOS that Apple doesn't officially of
 can break it until a new version comes out. Your library always keeps your videos.
 
 **How do I get updates?**
-AerialSwap checks once a day and tells you when a new version is out. Download it, quit AerialSwap, replace the app
-in your Applications folder, and open it the same way as the first time.
+AerialSwap checks once a day and tells you when a new version is out. Click the ⚙ button in the top right, then
+**Update to AerialSwap …**: it downloads the update, checks that it really comes from AerialSwap, installs it and
+restarts. (Coming from version 1.0? Download 1.1 once by hand, the same way as the first time. After that, updates
+work from inside the app.)
 
 **Does it play sound?**
 No. Wallpapers are silent, just like Apple's Aerials.

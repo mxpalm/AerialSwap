@@ -8,7 +8,7 @@ enum Main {
     static func main() {
         let args = Array(CommandLine.arguments.dropFirst())
         migrateDefaults()
-        if ["--transcode", "--list", "--sync-group", "--remove-group"].contains(args.first ?? "") {
+        if ["--transcode", "--list", "--sync-group", "--remove-group", "--install-update"].contains(args.first ?? "") {
             Task { exit(await CLI.run(args)) }
             dispatchMain()
         }
@@ -67,9 +67,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 ///   AerialSwap --transcode <in> <out.mov> [--fps auto|60|120|240] [--start s] [--end s] [--loop s] [--interpolate] [--enhance] [--freeze s]
 ///   AerialSwap --sync-group
 ///   AerialSwap --remove-group
+///   AerialSwap --install-update <zip URL> <signature URL>   (tests Updater on a copy of the app; doesn't relaunch)
 enum CLI {
     static func run(_ args: [String]) async -> Int32 {
         let store = AerialStore()
+        if args.first == "--install-update" {
+            guard args.count == 3, let zip = URL(string: args[1]), let signature = URL(string: args[2]) else {
+                print("usage: AerialSwap --install-update <zip URL> <signature URL>"); return 2
+            }
+            guard Updater.canInstall else { print("error: this copy can't be replaced (translocated or read-only)"); return 1 }
+            do {
+                print("installed \(try await Updater.install(zip: zip, signature: signature).path)")
+                return 0
+            } catch {
+                print("error: \(error.localizedDescription)"); return 1
+            }
+        }
         if args.first == "--sync-group" { return await syncGroup() }
         if args.first == "--remove-group" {
             do {

@@ -66,9 +66,10 @@ enum Snapshot {
         ]
         for (name, setup) in scenes {
             await setup(model)
-            let renderer = ImageRenderer(content: ContentView(model: model).frame(width: 1180, height: 760))
-            renderer.scale = 1
-            guard let image = renderer.cgImage,
+            // The first render of a screen that was just switched to (e.g. intro to Library) has no glass panels or
+            // toolbar, so render it once and throw that away.
+            _ = render(model)
+            guard let image = render(model),
                   let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
                 print("could not render \(name)"); return 1
             }
@@ -77,6 +78,12 @@ enum Snapshot {
             print("wrote \(file.path)")
         }
         return 0
+    }
+
+    private static func render(_ model: AppModel) -> CGImage? {
+        let renderer = ImageRenderer(content: ContentView(model: model).frame(width: 1180, height: 760))
+        renderer.scale = 1
+        return renderer.cgImage
     }
 
     private static func frame(_ url: URL, large: Bool) async -> NSImage? {

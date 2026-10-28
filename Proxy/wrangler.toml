@@ -8,7 +8,7 @@ compatibility_date = "2026-10-01"
 # and paste the id it prints here.
 [[kv_namespaces]]
 binding = "CACHE"
-id = "PASTE_KV_NAMESPACE_ID_HERE"
+id = "a71d8b9b7be946fbaa5eea9ee9798ce4"
 
 # Uncached searches per IP: 30 a minute (per Cloudflare location). namespace_id is any number unique in your account.
 [[ratelimits]]

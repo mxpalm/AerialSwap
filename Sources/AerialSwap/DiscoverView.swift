@@ -149,7 +149,7 @@ private struct DiscoverPanel: View {
         if !model.pixabay.isAvailable && !model.isSnapshot {
             message(icon: "key", title: "Discover isn't set up",
                     text: "This build has no Discover proxy. To use your own free Pixabay API key, run\n"
-                        + "defaults write local.aerialswap PixabayKey <key>\nand reopen AerialSwap.")
+                        + "defaults write io.github.mxpalm.AerialSwap PixabayKey <key>\nand reopen AerialSwap.")
         } else if model.discoverVideos.isEmpty, let error = model.discoverError {
             message(icon: "wifi.exclamationmark", title: "Couldn't load videos", text: error) {
                 Button("Try Again") { model.loadDiscover() }

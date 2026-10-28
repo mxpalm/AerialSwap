@@ -136,7 +136,7 @@ don't contain one: they search through the Discover proxy, a small Cloudflare Wo
 own takes precedence over the proxy. AerialSwap uses the first of:
 
 ```sh
-defaults write local.aerialswap PixabayKey <key>   # per user
+defaults write io.github.mxpalm.AerialSwap PixabayKey <key>   # per user
 PIXABAY_KEY=<key>                                  # environment
 echo <key> > Resources/pixabay.key                 # bundled by build.sh into the app (git-ignored)
 ```
@@ -204,7 +204,7 @@ AerialSwap.app/Contents/MacOS/AerialSwap --remove-group   # removes the group an
 - The extension reads entries.json only when it starts, so a change restarts `WallpaperAerialsExtension` and
   `WallpaperAgent`.
 - When macOS downloads a new manifest it replaces entries.json and the group is gone. A LaunchAgent
-  (`~/Library/LaunchAgents/local.aerialswap.group.plist`) watches the file and runs `AerialSwap --sync-group`,
+  (`~/Library/LaunchAgents/io.github.mxpalm.AerialSwap.group.plist`) watches the file and runs `AerialSwap --sync-group`,
   which adds the group back and restarts WallpaperAgent. It also runs at login. It's not a background process:
   launchd starts it on a change, and it exits. If the group has been removed 3 times within 10 minutes, it stops
   adding it (log: "removed the AerialSwap group 3 times") until AerialSwap is opened. The app syncs at launch,
@@ -225,7 +225,7 @@ frame (e.g. 60–120 s): any unlock during the hold leaves that frame on the des
 |---|---|
 | `~/Library/Application Support/AerialSwap/library/` | Your saved wallpapers (`<id>.mov`, `<id>.jpg`, `library.json`). If `library.json` can't be read, it's kept as `library.json.unreadable-<time>` and rebuilt from the videos (as "Recovered wallpaper") |
 | `~/Library/Application Support/AerialSwap/group/apple-entries.json` | Apple's downloaded Aerials manifest, which the group is built on and which `--remove-group` puts back |
-| `~/Library/LaunchAgents/local.aerialswap.group.plist` | Adds the group back after macOS replaced the manifest (`--sync-group`) |
+| `~/Library/LaunchAgents/io.github.mxpalm.AerialSwap.group.plist` | Adds the group back after macOS replaced the manifest (`--sync-group`) |
 | `~/Library/Application Support/AerialSwap/Index.plist.before-change` | `Store/Index.plist` as it was before the last desktop / screen saver switch |
 | `~/Library/Logs/AerialSwap.log` | Log |
 | `~/Library/Caches/AerialSwap/discover/` | Pixabay search results, kept 24 h |
@@ -260,7 +260,7 @@ Put Apple's manifest back, delete AerialSwap's copies and restart:
 
 
 ```sh
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/local.aerialswap.group.plist; rm ~/Library/LaunchAgents/local.aerialswap.group.plist
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/io.github.mxpalm.AerialSwap.group.plist; rm ~/Library/LaunchAgents/io.github.mxpalm.AerialSwap.group.plist
 A=~/Library/Application\ Support/com.apple.wallpaper/aerials
 cp ~/Library/Application\ Support/AerialSwap/group/apple-entries.json "$A/manifest/entries.json"
 for f in "$A"/videos/*.mov "$A"/thumbnails/*.png; do
@@ -298,9 +298,19 @@ shows a notice and a **Download AerialSwap x.y…** item in the ⚙ menu. **Chec
 the app menu) checks right away. The check only works while the repository is public; a private repo or a
 repo without releases finds nothing.
 
-The app is ad-hoc signed, not with a Developer ID, so macOS blocks a downloaded copy on first open. To open
-it, try once, then go to System Settings → Privacy & Security and click **Open Anyway**. An update is a
+By default the app is ad-hoc signed, not with a Developer ID, so macOS blocks a downloaded copy on first open.
+To open it, try once, then go to System Settings → Privacy & Security and click **Open Anyway**. An update is a
 manual download: quit AerialSwap, replace the app in `/Applications`, open it the same way.
+
+With an Apple Developer account, `build.sh` signs with your Developer ID and the hardened runtime instead, and
+`--zip` notarizes and staples the app, so it opens without the warning:
+
+```sh
+xcrun notarytool store-credentials AerialSwap --apple-id <you@example.com> --team-id <TEAMID>   # once
+SIGN_IDENTITY="Developer ID Application: <Name> (<TEAMID>)" NOTARY_PROFILE=AerialSwap ./build.sh --zip
+```
+
+Then drop step 3 of *Install* above.
 
 ## License
 

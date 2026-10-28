@@ -37,7 +37,7 @@ echo https://aerialswap-discover.<account>.workers.dev > ../Resources/discover-p
 ```
 
 The address isn't secret, so `Resources/discover-proxy.url` can be committed. build.sh writes it into the app's
-Info.plist as `DiscoverProxyURL`. Builds that have their own key (`defaults write local.aerialswap PixabayKey`,
+Info.plist as `DiscoverProxyURL`. Builds that have their own key (`defaults write io.github.mxpalm.AerialSwap PixabayKey`,
 `PIXABAY_KEY`, or `Resources/pixabay.key`) still ask Pixabay directly.
 
 Check it:

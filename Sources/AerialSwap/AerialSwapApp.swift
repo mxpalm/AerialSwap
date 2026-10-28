@@ -7,6 +7,7 @@ import Synchronization
 enum Main {
     static func main() {
         let args = Array(CommandLine.arguments.dropFirst())
+        migrateDefaults()
         if ["--transcode", "--list", "--sync-group", "--remove-group"].contains(args.first ?? "") {
             Task { exit(await CLI.run(args)) }
             dispatchMain()
@@ -17,6 +18,15 @@ enum Main {
             RunLoop.main.run()
         }
         AerialSwapApp.main()
+    }
+
+    /// Before 1.0 the bundle ID was `local.aerialswap`; its settings (intro seen, Pixabay key, …) are carried over once.
+    private static func migrateDefaults() {
+        let old = "local.aerialswap"
+        let defaults = UserDefaults.standard
+        guard let id = Bundle.main.bundleIdentifier, id != old, let values = defaults.persistentDomain(forName: old) else { return }
+        for (key, value) in values where defaults.object(forKey: key) == nil { defaults.set(value, forKey: key) }
+        defaults.removePersistentDomain(forName: old)
     }
 }
 

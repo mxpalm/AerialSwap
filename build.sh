@@ -4,6 +4,8 @@
 #   ./build.sh --install  build and move it to /Applications (keeps a single copy)
 #   ./build.sh --test     build ./AerialSwap.app as a test copy and open it (leaves the LaunchAgent on /Applications)
 #   ./build.sh --zip      build and pack AerialSwap-<version>.zip for a GitHub release
+# With SIGN_IDENTITY="Developer ID Application: …" it's signed with that identity and the hardened runtime instead of
+# ad-hoc; --zip then also notarizes and staples it when NOTARY_PROFILE names a `notarytool store-credentials` profile.
 # The version is the latest git tag (v1.2 -> 1.2), the build number the commit count.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -51,7 +53,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleName</key><string>AerialSwap</string>
     <key>CFBundleDisplayName</key><string>AerialSwap</string>
-    <key>CFBundleIdentifier</key><string>local.aerialswap</string>
+    <key>CFBundleIdentifier</key><string>io.github.mxpalm.AerialSwap</string>
     <key>CFBundleExecutable</key><string>AerialSwap</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundleIconName</key><string>AppIcon</string>
@@ -66,13 +68,26 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signature, no sandbox entitlements (needs access to ~/Library/Application Support/com.apple.wallpaper).
-codesign --force --sign - "$APP"
+# No sandbox entitlements (needs access to ~/Library/Application Support/com.apple.wallpaper).
+if [[ -n "${SIGN_IDENTITY:-}" ]]; then
+    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
+else
+    codesign --force --sign - "$APP"   # ad-hoc
+fi
 
 if $ZIP; then
     ZIPFILE="AerialSwap-$VERSION.zip"
     rm -f "$ZIPFILE"
     ditto -c -k --keepParent "$APP" "$ZIPFILE"   # ditto keeps the signature and bundle metadata intact
+    if [[ -n "${SIGN_IDENTITY:-}" && -n "${NOTARY_PROFILE:-}" ]]; then
+        xcrun notarytool submit "$ZIPFILE" --keychain-profile "$NOTARY_PROFILE" --wait
+        xcrun stapler staple "$APP"
+        rm -f "$ZIPFILE"
+        ditto -c -k --keepParent "$APP" "$ZIPFILE"   # again, now with the notarization ticket in the app
+        echo "Notarized and stapled"
+    elif [[ -n "${SIGN_IDENTITY:-}" ]]; then
+        echo "Note: signed but not notarized (set NOTARY_PROFILE); Gatekeeper still blocks it on first open." >&2
+    fi
     echo "Packed $(pwd)/$ZIPFILE (version $VERSION, build $BUILD)"
     exit 0
 fi

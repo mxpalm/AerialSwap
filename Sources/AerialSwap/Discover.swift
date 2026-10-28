@@ -119,7 +119,7 @@ struct PixabayClient: Sendable {
     let cacheDir = FileManager.default.homeDirectoryForCurrentUser
         .appending(path: "Library/Caches/AerialSwap/discover")
 
-    /// The key comes from (first match): `defaults write local.aerialswap PixabayKey <key>`, the PIXABAY_KEY
+    /// The key comes from (first match): `defaults write io.github.mxpalm.AerialSwap PixabayKey <key>`, the PIXABAY_KEY
     /// environment variable, or pixabay.key in the app bundle (build.sh copies Resources/pixabay.key).
     /// Without one, searches go through the proxy.
     init() {

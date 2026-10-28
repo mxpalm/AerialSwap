@@ -270,8 +270,12 @@ struct AerialGroup: Sendable {
 /// A LaunchAgent that runs `AerialSwap --sync-group` at login and whenever the Aerials manifest changes, so the group
 /// comes back after macOS downloads a new manifest. It is not a background process: launchd starts it, it syncs, it exits.
 enum GroupWatcher {
-    static let label = "local.aerialswap.group"
-    static var plistURL: URL {
+    static let label = "io.github.mxpalm.AerialSwap.group"
+    /// The agent's label before 1.0, when the bundle ID was `local.aerialswap`.
+    private static let legacyLabel = "local.aerialswap.group"
+    static var plistURL: URL { plistURL(label) }
+
+    private static func plistURL(_ label: String) -> URL {
         FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/LaunchAgents/\(label).plist")
     }
 
@@ -285,6 +289,7 @@ enum GroupWatcher {
             Log.info("Group: running from a translocated copy; the LaunchAgent is installed once AerialSwap is in /Applications")
             return
         }
+        removeAgent(at: plistURL(legacyLabel))
         let manifest = AerialStore().entriesURL
         let plist: [String: Any] = [
             "Label": label,
@@ -310,10 +315,15 @@ enum GroupWatcher {
     }
 
     static func uninstall() {
-        guard FileManager.default.fileExists(atPath: plistURL.path) else { return }
-        launchctl(["bootout", domain, plistURL.path])
-        try? FileManager.default.removeItem(at: plistURL)
-        Log.info("Group: LaunchAgent removed")
+        removeAgent(at: plistURL(legacyLabel))
+        removeAgent(at: plistURL)
+    }
+
+    private static func removeAgent(at url: URL) {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        launchctl(["bootout", domain, url.path])
+        try? FileManager.default.removeItem(at: url)
+        Log.info("Group: LaunchAgent \(url.lastPathComponent) removed")
     }
 
     /// Gatekeeper's App Translocation (a quarantined app opened where it was downloaded).

@@ -163,7 +163,7 @@ struct URLImportDialog: View {
                 }
                 HStack(spacing: 8) {
                     Image(systemName: "link").foregroundStyle(Theme.secondary).accessibilityHidden(true)
-                    TextField("https://", text: $model.urlImportText)
+                    RenderableTextField("https://", text: $model.urlImportText, flat: model.isSnapshot)
                         .textFieldStyle(.plain)
                         .focused($fieldFocused)
                         .onSubmit { if isValid && model.urlImportSectionProblem == nil { model.importURL(model.urlImportText) } }
@@ -218,7 +218,7 @@ struct URLImportDialog: View {
     }
 
     private func timeField(_ placeholder: String, text: Binding<String>) -> some View {
-        TextField(placeholder, text: text)
+        RenderableTextField(placeholder, text: text, flat: model.isSnapshot)
             .textFieldStyle(.plain)
             .font(.system(size: 13).monospacedDigit())
             .multilineTextAlignment(.center)

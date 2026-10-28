@@ -250,7 +250,7 @@ private struct LibraryPanel: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(Theme.secondary).accessibilityHidden(true)
-            TextField("Search your wallpapers", text: $model.librarySearch)
+            RenderableTextField("Search your wallpapers", text: $model.librarySearch, flat: model.isSnapshot)
                 .textFieldStyle(.plain)
         }
         .font(.system(size: 13))

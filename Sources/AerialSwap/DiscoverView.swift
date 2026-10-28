@@ -27,7 +27,7 @@ struct DiscoverLayout: View {
                 Text(video.title).font(.system(size: 40, weight: .bold)).tracking(-0.8).lineLimit(2)
                 Text(details(video)).font(.system(size: 14)).opacity(0.9)
                 if let page = video.page {
-                    Link(destination: page) {
+                    RenderableLink(destination: page, flat: model.isSnapshot) {
                         Label("Video by \(video.credit)", systemImage: "arrow.up.right")
                             .labelStyle(TrailingIconLabelStyle())
                     }
@@ -90,7 +90,7 @@ private struct DiscoverPanel: View {
             Text("Discover").font(.system(size: 17, weight: .bold))
             Spacer()
             // Pixabay asks for a visible link wherever its results are shown.
-            Link(destination: PixabayClient.homepage) {
+            RenderableLink(destination: PixabayClient.homepage, flat: model.isSnapshot) {
                 Label("Videos from Pixabay", systemImage: "arrow.up.right").labelStyle(TrailingIconLabelStyle())
             }
             .font(.system(size: 12))
@@ -101,7 +101,7 @@ private struct DiscoverPanel: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(Theme.secondary).accessibilityHidden(true)
-            TextField("Search Pixabay videos", text: $model.discoverSearch)
+            RenderableTextField("Search Pixabay videos", text: $model.discoverSearch, flat: model.isSnapshot)
                 .textFieldStyle(.plain)
                 .onSubmit { model.submitDiscoverSearch() }
             if !model.discoverQuery.isEmpty || !model.discoverSearch.isEmpty {

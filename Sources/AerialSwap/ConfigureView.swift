@@ -80,7 +80,7 @@ private struct OptionsPanel: View {
             VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Name in your library").font(.system(size: 12)).foregroundStyle(Theme.secondary)
-                    TextField("Name", text: nameBinding)
+                    RenderableTextField("Name", text: nameBinding, flat: model.isSnapshot)
                         .textFieldStyle(.plain)
                         .font(.system(size: 13))
                         .padding(.horizontal, 10)

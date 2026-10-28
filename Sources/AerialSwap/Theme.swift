@@ -358,6 +358,42 @@ struct StatusPill: View {
     }
 }
 
+/// A TextField, or its text as a label when `flat` (--snapshot renders: ImageRenderer draws text fields as placeholders).
+struct RenderableTextField: View {
+    let placeholder: String
+    @Binding var text: String
+    var flat = false
+    @Environment(\.multilineTextAlignment) private var alignment
+
+    init(_ placeholder: String, text: Binding<String>, flat: Bool = false) {
+        self.placeholder = placeholder
+        self._text = text
+        self.flat = flat
+    }
+
+    var body: some View {
+        if flat {
+            Text(text.isEmpty ? placeholder : text)
+                .lineLimit(1)
+                .opacity(text.isEmpty ? 0.45 : 1)
+                .frame(maxWidth: .infinity, alignment: alignment == .center ? .center : alignment == .trailing ? .trailing : .leading)
+        } else {
+            TextField(placeholder, text: $text)
+        }
+    }
+}
+
+/// A Link, or only its label when `flat` (--snapshot renders: ImageRenderer draws links as placeholders).
+struct RenderableLink<Label: View>: View {
+    let destination: URL
+    var flat = false
+    @ViewBuilder let label: Label
+
+    var body: some View {
+        if flat { label } else { Link(destination: destination) { label } }
+    }
+}
+
 /// Shows the content as is when it fits, otherwise scrolls. `flat` skips scrolling entirely
 /// (--snapshot renders: ImageRenderer can't draw scroll views).
 struct FitOrScroll<Content: View>: View {

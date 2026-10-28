@@ -37,6 +37,7 @@ enum Snapshot {
             ("05-configure", { m in
                 m.showURLImport = false
                 await load(m, footage.appending(path: "scene_1080p30.mov"))
+                m.displayName = "Mountain clouds"
                 m.trimStart = min(2, m.trimEnd / 5); m.trimEnd *= 0.85
                 m.playhead = (m.trimStart + m.trimEnd) / 2
             }),
@@ -56,7 +57,7 @@ enum Snapshot {
             ("09-success", { m in
                 m.workFlow = nil; m.showsProgress = false; m.isBusy = false
                 m.sourceURL = nil; m.sourceInfo = nil
-                m.done = DoneInfo(assetID: "lib0", role: "Desktop & Screen Saver", videoName: "Dolomites drone",
+                m.done = DoneInfo(assetID: "lib0", role: "Desktop & Screen Saver", videoName: "Lofoten fjord",
                                   took: 114, summary: "60 fps · Smooth · Loop", savedToLibrary: true)
             }),
             ("10-toast", { m in
@@ -66,9 +67,6 @@ enum Snapshot {
         ]
         for (name, setup) in scenes {
             await setup(model)
-            // The first render of a screen that was just switched to (e.g. intro to Library) has no glass panels or
-            // toolbar, so render it once and throw that away.
-            _ = render(model)
             guard let image = render(model),
                   let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
                 print("could not render \(name)"); return 1
@@ -81,8 +79,13 @@ enum Snapshot {
     }
 
     private static func render(_ model: AppModel) -> CGImage? {
-        let renderer = ImageRenderer(content: ContentView(model: model).frame(width: 1180, height: 760))
-        renderer.scale = 1
+        // ImageRenderer draws Liquid Glass only when the view also has an AppKit-backed control in it, so a hidden
+        // text field is added. (Without one, every glass panel, button and the toolbar are missing.)
+        let content = ContentView(model: model)
+            .background(alignment: .topLeading) { TextField("", text: .constant("")).frame(width: 1, height: 1).opacity(0.01) }
+            .frame(width: 1180, height: 760)
+        let renderer = ImageRenderer(content: content)
+        renderer.scale = 2   // Retina, like the real window
         return renderer.cgImage
     }
 
@@ -127,7 +130,7 @@ enum Snapshot {
 
         let items: [(String, String)] = [
             ("Lofoten fjord", "scene_2160p30.mov"), ("Patagonia ridge", "scene_1080p30.mov"),
-            ("Big Sur coast", "src_1080p24.mov"), ("Svalbard glacier", "scene_720p30.mov"),
+            ("Misty forest", "src_1080p24.mov"), ("Svalbard glacier", "scene_720p30.mov"),
             ("Night over Lisbon", "hdr_hlg1080.mov"), ("Kyoto evening", "src_2160p120.mov"),
         ]
         for (index, (name, file)) in items.enumerated() {

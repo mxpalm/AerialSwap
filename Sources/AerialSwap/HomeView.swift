@@ -1,34 +1,130 @@
+import AppKit
 import SwiftUI
 
 /// The Library (home) and Discover panels. The window shows the selected video full size.
 struct HomeView: View {
     @Bindable var model: AppModel
 
+    private var isPreviewing: Bool { model.isPreviewingWallpaper }
+
     private var backgroundImage: NSImage? {
-        if model.section == .discover {
-            return model.selectedDiscoverVideo.flatMap { model.backdrops["discover-\($0.id)"] ?? model.discoverThumbnails[$0.id] }
+        // Discover without a pick keeps showing the Library's wallpaper
+        if model.section == .discover, let video = model.selectedDiscoverVideo {
+            return model.backdrops["discover-\(video.id)"] ?? model.discoverThumbnails[video.id]
         }
         if let item = model.selectedLibraryItem, let image = model.backdrops["lib-\(item.id)"] { return image }
         return model.desktopAsset.flatMap { model.backdrops[model.backdropKey(for: $0)] }
     }
 
+    private var canPreview: Bool { model.section == .library && !model.assets.isEmpty }
+
     var body: some View {
-        ZStack {
-            Backdrop(image: backgroundImage, player: model.visibleBackgroundPlayer, scrim: .side)
-            HeaderEdgeEffect()
-            VStack(spacing: 0) {
-                if model.assets.isEmpty {
-                    NoAerialsState(model: model)
-                } else if model.section == .discover {
-                    DiscoverLayout(model: model)
-                } else {
-                    LibraryLayout(model: model)
+        GeometryReader { geo in
+            ZStack {
+                Backdrop(image: backgroundImage, player: model.visibleBackgroundPlayer, scrim: isPreviewing ? .clear : .side)
+                HeaderEdgeEffect().opacity(isPreviewing ? 0 : 1)
+                if canPreview {
+                    // A click on the wallpaper (anywhere outside the panel) hides or brings back the Library;
+                    // while previewing the panels let clicks through, so it is the whole window.
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .ignoresSafeArea()
+                        .onTapGesture(perform: togglePreview)
+                        .accessibilityHidden(true)
+                }
+                VStack(spacing: 0) {
+                    if model.assets.isEmpty {
+                        NoAerialsState(model: model)
+                    } else if model.section == .discover {
+                        DiscoverLayout(model: model)
+                    } else {
+                        LibraryLayout(model: model, isPreviewing: isPreviewing)
+                    }
                 }
             }
+            .overlay(alignment: .trailing) {
+                if canPreview { handle }
+            }
+            .onContinuousHover { pointerMoved($0, width: geo.size.width) }
         }
         .screenToolbar(snapshot: model.isSnapshot) { SectionSwitcher(model: model) } trailing: { TopBarActions(model: model) }
+        // The preview hides the whole header: the toolbar and the traffic lights.
+        .toolbar(isPreviewing ? .hidden : .visible, for: .windowToolbar)
+        .onChange(of: isPreviewing) { setWindowButtonsHidden(isPreviewing) }
+        .onChange(of: canPreview) { if !canPreview { model.isPreviewingWallpaper = false } }
+        .onDisappear {
+            // e.g. Add Video (Cmd-O) while previewing: the next screen gets its header back.
+            model.isPreviewingWallpaper = false
+            setWindowButtonsHidden(false)
+        }
+    }
+
+    private func setWindowButtonsHidden(_ hidden: Bool) {
+        guard let window = NSApp.windows.first(where: { $0.isVisible && $0.standardWindowButton(.closeButton) != nil }) else { return }
+        for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
+            window.standardWindowButton(kind)?.isHidden = hidden
+        }
+    }
+
+    /// Sits in the gap left of the Library panel and grows while a click would hide it (see pointerMoved); while
+    /// previewing it moves to the window's right edge to bring the panels back.
+    private var handle: some View {
+        Button(action: togglePreview) {
+            Image(systemName: isPreviewing ? "chevron.compact.left" : "chevron.compact.right")
+        }
+        .buttonStyle(EdgeHandleStyle(isExpanded: model.showsPreviewHandle))
+        .keyboardShortcut(isPreviewing ? .cancelAction : nil)
+        .help(isPreviewing ? "Show the Library (Esc)" : "Hide the Library to preview the wallpaper")
+        .accessibilityLabel(isPreviewing ? "Show Library" : "Preview Wallpaper")
+        .padding(.trailing, isPreviewing ? Self.handleEdgeInset : LibraryLayout.edgeInset + LibraryLayout.panelWidth + 10 - EdgeHandleStyle.width / 2)
+        .animation(.snappy(duration: 0.25), value: model.showsPreviewHandle)
+    }
+
+    private static let handleEdgeInset: CGFloat = 8
+    private static let revealDistance: CGFloat = 48
+
+    private func togglePreview() {
+        withAnimation(.smooth(duration: 0.45)) { model.isPreviewingWallpaper.toggle() }
+    }
+
+    /// The handle grows whenever a click would toggle the preview: over the wallpaper left of the panel (and near the
+    /// panel's edge), or anywhere while previewing. It shrinks back to its hint line once the pointer leaves.
+    private func pointerMoved(_ phase: HoverPhase, width: CGFloat) {
+        guard canPreview, case .active(let point) = phase else { model.showsPreviewHandle = false; return }
+        let edge = width - LibraryLayout.edgeInset - LibraryLayout.panelWidth
+        model.showsPreviewHandle = isPreviewing || point.x < edge + Self.revealDistance
     }
 }
+
+/// A slim Liquid Glass grabber, like the edge controls of macOS sidebars and Stage Manager. At rest it is only a thin
+/// line, so it can be found without covering the wallpaper; near the pointer it grows into the glass button.
+private struct EdgeHandleStyle: ButtonStyle {
+    static let width: CGFloat = 22
+    var isExpanded: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        ZStack {
+            if isExpanded {
+                configuration.label
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                    .frame(width: Self.width, height: 64)
+                    .glassEffect(.regular.interactive(), in: Capsule())
+                    .transition(.opacity.combined(with: .scale(scale: 0.5, anchor: .center)))
+            } else {
+                Capsule()
+                    .fill(.white.opacity(0.45))
+                    .frame(width: 5, height: 40)
+                    .shadow(color: .black.opacity(0.35), radius: 3)
+                    .transition(.opacity)
+            }
+        }
+        .frame(width: Self.width, height: 64)
+        .contentShape(Capsule())
+        .opacity(configuration.isPressed ? 0.85 : 1)
+    }
+}
+
 
 /// Where macOS shows a library wallpaper. Checked = in use; to stop using it, pick another wallpaper for that role.
 private struct UseForItems: View {
@@ -52,6 +148,10 @@ private struct UseForItems: View {
 
 private struct LibraryLayout: View {
     @Bindable var model: AppModel
+    var isPreviewing = false
+
+    static let panelWidth: CGFloat = 460
+    static let edgeInset: CGFloat = 16
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 20) {
@@ -59,10 +159,14 @@ private struct LibraryLayout: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, 8)
                 .padding(.bottom, 12)
-            LibraryPanel(model: model)
-                .frame(width: 460)
+                .opacity(isPreviewing ? 0 : 1)
+            // Stays in place while hidden, so the video keeps playing (onDisappear would pause it).
+            LibraryPanel(model: model, isPreviewing: isPreviewing)
+                .frame(width: Self.panelWidth)
+                .offset(x: isPreviewing ? Self.panelWidth + Self.edgeInset * 2 : 0)
         }
-        .padding(.horizontal, 16)
+        .allowsHitTesting(!isPreviewing)
+        .padding(.horizontal, Self.edgeInset)
         .padding(.top, 4)
         .padding(.bottom, 16)
         .onAppear { model.showBackgroundVideo() }
@@ -97,6 +201,7 @@ private struct LibraryLayout: View {
 
 private struct LibraryPanel: View {
     @Bindable var model: AppModel
+    var isPreviewing = false
 
     private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
 
@@ -121,6 +226,7 @@ private struct LibraryPanel: View {
         .padding(16)
         .frame(maxHeight: .infinity)
         .glassPanel(opacity: 0.72)
+        .contentShape(.rect(cornerRadius: 22))   // clicks between tiles stay on the panel instead of toggling the preview
     }
 
     private var grid: some View {
@@ -174,7 +280,7 @@ private struct LibraryPanel: View {
                 }
                 .buttonStyle(PillButtonStyle(kind: .primary, height: 44, fullWidth: true))
                 .disabled(!model.canSetWallpaper)
-                .keyboardShortcut(model.done == nil ? .defaultAction : nil)
+                .keyboardShortcut(model.done == nil && !isPreviewing ? .defaultAction : nil)
                 Text(footerCaption).font(.system(size: 12)).foregroundStyle(Theme.secondary)
             }
         }

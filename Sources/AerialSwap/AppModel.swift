@@ -151,6 +151,8 @@ final class AppModel {
     // Transient UI state
     var showIntro: Bool
     var section = HomeSection.library
+    var isPreviewingWallpaper = false   // the Library's panels are hidden for a clean look at the wallpaper
+    var showsPreviewHandle = false
     var pendingConversion: URL?       // unreadable file waiting for the user's OK to convert with ffmpeg
     var conversionPrompt = ""
     var showImporter = false
@@ -373,7 +375,7 @@ final class AppModel {
     func role(of item: LibraryItem) -> String? { roleTitle(for: item.id) }
 
     func deleteLibraryItem(_ item: LibraryItem) {
-        if backgroundVideoKey == "lib-\(item.id)" { stopBackgroundVideo() }   // don't hold the file open
+        if backgroundVideoKey == "lib-\(item.id)" { stopBackgroundVideo(immediately: true) }   // don't hold the file open
         do {
             try library.remove(item)
             libraryThumbnails[item.id] = nil
@@ -682,16 +684,18 @@ final class AppModel {
     @ObservationIgnored private var backgroundLooper: AVPlayerLooper?
     @ObservationIgnored private var backgroundObservations: [NSKeyValueObservation] = []
 
-    /// What the current section should play: the selected library item (local file) or Discover video (streamed).
+    /// The library wallpaper behind the panels when nothing is picked in Discover: the selected one, else the desktop's.
+    var backgroundLibraryItem: LibraryItem? { selectedLibraryItem ?? libraryItems.first { $0.id == desktopID } }
+
+    /// What the current section should play: the selected Discover video (streamed), else `backgroundLibraryItem`
+    /// (local file), so switching sections or deselecting never goes black.
     private var wantedBackgroundVideo: (key: String, url: URL)? {
-        switch section {
-        case .library:
-            guard let item = selectedLibraryItem else { return nil }
-            return ("lib-\(item.id)", library.videoURL(item))
-        case .discover:
-            guard let video = selectedDiscoverVideo, let url = video.previewURL else { return nil }
+        if section == .discover, let video = selectedDiscoverVideo {
+            guard let url = video.previewURL else { return nil }
             return ("discover-\(video.id)", url)
         }
+        guard let item = backgroundLibraryItem else { return nil }
+        return ("lib-\(item.id)", library.videoURL(item))
     }
 
     /// Plays the current section's selection: resumes it when it's already loaded, otherwise starts it.
@@ -707,9 +711,9 @@ final class AppModel {
         startBackgroundVideo(wanted.url, key: wanted.key, attempt: 0)
     }
 
-    /// The background video to show now: only once it plays, and only in the section it belongs to.
+    /// The background video to show now: only once it plays, and only while the current section wants it.
     var visibleBackgroundPlayer: AVPlayer? {
-        guard isBackgroundVideoPlaying, let key = backgroundVideoKey, key.hasPrefix(Self.backgroundKeyPrefix(section)) else { return nil }
+        guard isBackgroundVideoPlaying, let key = backgroundVideoKey, key == wantedBackgroundVideo?.key else { return nil }
         return backgroundPlayer
     }
 
@@ -721,9 +725,11 @@ final class AppModel {
     }
 
     /// The layouts pause their video while they're hidden (it keeps its place for when they're back).
-    /// Only that section's video: the next section's layout may already have started its own.
+    /// Only that section's video: the next section's layout may already have started its own,
+    /// or kept playing this one (Discover without a pick shows the Library's video).
     func pauseBackgroundVideo(in section: HomeSection) {
-        guard backgroundVideoKey?.hasPrefix(Self.backgroundKeyPrefix(section)) == true else { return }
+        guard let key = backgroundVideoKey, key.hasPrefix(Self.backgroundKeyPrefix(section)) else { return }
+        if section != self.section, key == wantedBackgroundVideo?.key { return }
         backgroundPlayer?.pause()
     }
 
@@ -767,11 +773,20 @@ final class AppModel {
     }
 
     /// Also stops the looper's queued copies of the item, so no old preview keeps downloading or holds a file open.
-    func stopBackgroundVideo() {
+    /// The items go once the backdrop has faded the video out (0.3 s): a player view without them turns black.
+    /// `immediately` drops them right away, e.g. before the file is deleted.
+    func stopBackgroundVideo(immediately: Bool = false) {
         backgroundObservations = []
         backgroundLooper?.disableLooping()
         backgroundPlayer?.pause()
-        backgroundPlayer?.removeAllItems()
+        if immediately {
+            backgroundPlayer?.removeAllItems()
+        } else if let player = backgroundPlayer, let looper = backgroundLooper {
+            Task {
+                try? await Task.sleep(for: .seconds(0.5))
+                withExtendedLifetime(looper) { player.removeAllItems() }
+            }
+        }
         backgroundLooper = nil
         backgroundPlayer = nil
         backgroundVideoKey = nil

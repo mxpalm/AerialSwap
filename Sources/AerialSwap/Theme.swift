@@ -204,7 +204,7 @@ struct OptionLabel: View {
 /// A video frame filling the window, with a scrim so text and panels stay readable.
 /// With a `player`, the video plays over the frame (the frame shows until the first video frame arrives).
 struct Backdrop: View {
-    enum Scrim { case standard, dark, side }
+    enum Scrim { case standard, dark, side, clear }
     let image: NSImage?
     var player: AVPlayer? = nil
     var blur: CGFloat = 0
@@ -241,6 +241,8 @@ struct Backdrop: View {
     @ViewBuilder private var scrimView: some View {
         let shade = Color(red: 0.03, green: 0.04, blue: 0.055)
         switch scrim {
+        case .clear:
+            Color.clear
         case .standard:
             LinearGradient(stops: [.init(color: shade.opacity(0.45), location: 0), .init(color: shade.opacity(0), location: 0.28),
                                    .init(color: shade.opacity(0.1), location: 0.5), .init(color: shade.opacity(0.75), location: 1)],

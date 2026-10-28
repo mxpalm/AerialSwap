@@ -278,6 +278,8 @@ enum GroupWatcher {
     /// Installs or updates the agent for this copy of the app (e.g. after it moved to /Applications).
     static func install() {
         guard let executable = Bundle.main.executableURL, Bundle.main.bundleURL.pathExtension == "app" else { return }
+        // A test copy (./build.sh --test) leaves the agent on the installed app.
+        guard Bundle.main.object(forInfoDictionaryKey: "AerialSwapTestBuild") as? Bool != true else { return }
         // A downloaded copy opened in place runs from a temporary, read-only path that is gone after quitting.
         guard !isTranslocated else {
             Log.info("Group: running from a translocated copy; the LaunchAgent is installed once AerialSwap is in /Applications")

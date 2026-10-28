@@ -2,6 +2,7 @@
 # Builds AerialSwap.app with SwiftPM (no Xcode needed) and ad-hoc signs it.
 #   ./build.sh            build ./AerialSwap.app
 #   ./build.sh --install  build and move it to /Applications (keeps a single copy)
+#   ./build.sh --test     build ./AerialSwap.app as a test copy and open it (leaves the LaunchAgent on /Applications)
 #   ./build.sh --zip      build and pack AerialSwap-<version>.zip for a GitHub release
 # The version is the latest git tag (v1.2 -> 1.2), the build number the commit count.
 set -euo pipefail
@@ -9,7 +10,9 @@ cd "$(dirname "$0")"
 
 INSTALL=false
 ZIP=false
+TEST=false
 [[ "${1:-}" == "--install" ]] && INSTALL=true
+[[ "${1:-}" == "--test" ]] && TEST=true
 [[ "${1:-}" == "--zip" ]] && ZIP=true
 VERSION="$( (git describe --tags --abbrev=0 2>/dev/null || true) | sed 's/^v//')"
 VERSION="${VERSION:-1.0}"
@@ -37,6 +40,9 @@ PROXY_ENTRY=""
 if [[ -f Resources/discover-proxy.url ]]; then
     PROXY_ENTRY="<key>DiscoverProxyURL</key><string>$(tr -d '[:space:]' < Resources/discover-proxy.url)</string>"
 fi
+# A test copy must not point the group LaunchAgent at itself (see GroupWatcher.install).
+TEST_ENTRY=""
+if $TEST; then TEST_ENTRY="<key>AerialSwapTestBuild</key><true/>"; fi
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -55,6 +61,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>27.0</string>
     <key>NSHighResolutionCapable</key><true/>
     $PROXY_ENTRY
+    $TEST_ENTRY
 </dict>
 </plist>
 PLIST
@@ -76,6 +83,12 @@ if $INSTALL; then
     mv "$APP" "/Applications/$APP"
     touch "/Applications/$APP"   # refresh the Dock/Finder icon cache
     echo "Installed /Applications/$APP"
+    exit 0
+fi
+
+if $TEST; then
+    open -n "$APP"   # -n: a separate instance, even while the installed copy runs
+    echo "Opened test build $(pwd)/$APP"
     exit 0
 fi
 

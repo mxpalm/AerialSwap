@@ -8,7 +8,7 @@ the files it writes, tests and releases. For installing and using the app, see t
 ```sh
 ./build.sh --install  # builds and moves AerialSwap.app to /Applications (quit the app first)
 ./build.sh            # or just build ./AerialSwap.app in the project folder
-./build.sh --zip      # build and pack AerialSwap-<version>.zip for a GitHub release
+./build.sh --zip      # build and pack AerialSwap-<version>.zip and its .sig (for in-app updates) for a GitHub release
 ```
 
 The version comes from the latest git tag (`v1.2` → 1.2, `1.0` without tags), the build number from the

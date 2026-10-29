@@ -298,6 +298,126 @@ struct DownloadPartFields: View {
     }
 }
 
+/// From Wallpaper Engine: the video wallpapers the user's Steam downloaded from the Workshop. AerialSwap doesn't
+/// download anything here, it only reads Steam's folders (see WallpaperEngine).
+struct WorkshopImportDialog: View {
+    @Bindable var model: AppModel
+    private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+
+    var body: some View {
+        DialogContainer {
+            VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("From Wallpaper Engine").font(.system(size: 22, weight: .bold))
+                    Text("Video wallpapers you subscribed to on the Wallpaper Engine Workshop, once Steam has downloaded them.")
+                        .font(.system(size: 14)).foregroundStyle(Theme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                content
+                if model.workshopScan.skipped > 0 {
+                    Label("\(model.workshopScan.skipped) scene, web or app wallpaper\(model.workshopScan.skipped == 1 ? "" : "s") "
+                          + "can't be used: AerialSwap takes video wallpapers only.", systemImage: "info.circle")
+                        .font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 8) {
+                    Button("Open Workshop") { model.openWorkshopPage() }
+                        .buttonStyle(PillButtonStyle(kind: .secondary, height: 32)).fixedSize()
+                    Button("Add Folder…") { model.addWorkshopFolder() }
+                        .buttonStyle(PillButtonStyle(kind: .secondary, height: 32)).fixedSize()
+                    Button { model.rescanWorkshop() } label: { Image(systemName: "arrow.clockwise") }
+                        .buttonStyle(PillButtonStyle(kind: .secondary, height: 32)).fixedSize()
+                        .disabled(model.isWorkshopScanning)
+                        .help("Look again")
+                        .accessibilityLabel("Look again")
+                    Spacer(minLength: 0)
+                    Button("Close") { model.showWorkshopImport = false }
+                        .buttonStyle(PillButtonStyle(kind: .quiet, height: 32)).fixedSize()
+                        .keyboardShortcut(.cancelAction)
+                }
+                Text("Only use wallpapers you subscribed to, for your own Mac. Wallpaper Engine is a trademark of "
+                     + "Wallpaper Engine Team, Steam of Valve. AerialSwap is an independent app.")
+                    .font(.system(size: 11)).foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        if model.workshopScan.videos.isEmpty {
+            if model.isWorkshopScanning {
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity, minHeight: 80)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(model.workshopScan.sources.isEmpty ? "No Steam with Wallpaper Engine downloads found."
+                                                            : "No video wallpapers downloaded yet.")
+                        .font(.system(size: 14, weight: .semibold))
+                    Group {
+                        Text("1. Run the Windows version of Steam on this Mac, for example with CrossOver, Whisky or "
+                             + "Sevoflurane, and sign in with the account that owns Wallpaper Engine.")
+                        Text("2. Subscribe to video wallpapers on the Workshop (Open Workshop below).")
+                        Text("3. Once Steam has downloaded them, they show up here.")
+                    }
+                    .font(.system(size: 13)).foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        } else if model.isSnapshot {
+            grid   // ImageRenderer leaves a ScrollView empty
+        } else {
+            ScrollView { grid }.scrollIndicators(.never).frame(maxHeight: 340)
+        }
+    }
+
+    private var grid: some View {
+        LazyVGrid(columns: columns, spacing: 12) {
+            ForEach(model.workshopScan.videos) { video in WorkshopTile(model: model, video: video) }
+        }
+        .padding(3)
+    }
+}
+
+private struct WorkshopTile: View {
+    @Bindable var model: AppModel
+    let video: WorkshopVideo
+
+    var body: some View {
+        Button { model.useWorkshopVideo(video) } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                ZStack {
+                    Thumb(image: model.workshopThumbnails[video.id], cornerRadius: 9)
+                    if let rating = video.rating {
+                        badge(rating).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    }
+                    badge(video.video.pathExtension.uppercased())
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                }
+                Text(video.title).font(.system(size: 12, weight: .semibold)).lineLimit(1).truncationMode(.tail)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isBusy)
+        .contextMenu {
+            if let page = video.page { Link("View on Steam Workshop", destination: page) }
+            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([video.video]) }
+        }
+        .help("\(video.title)\n\(video.size.formatted(.byteCount(style: .file))) · \(video.source)")
+    }
+
+    private func badge(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .bold))
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(Capsule().fill(.black.opacity(0.62)))
+            .padding(5)
+    }
+}
+
 /// After Set as Wallpaper: what now plays where, over the Library.
 struct SuccessDialog: View {
     @Bindable var model: AppModel

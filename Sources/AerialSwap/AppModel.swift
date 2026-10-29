@@ -118,8 +118,8 @@ final class AppModel {
     var selectedDiscoverID: Int?
     @ObservationIgnored private var discoverPage = 0
     @ObservationIgnored private var discoverRequest = 0   // newer requests win over slower older ones
-    /// Set while the loaded source is a Pixabay download, so the library keeps the credit.
-    @ObservationIgnored private var sourceCredit: DiscoverVideo?
+    /// Set while the loaded source is a Pixabay or Workshop video, so the library keeps the credit and its page.
+    @ObservationIgnored private var sourceCredit: (credit: String, page: String?)?
     private var downloader: VideoDownloader?
     private var urlImporter: URLImporter?
     private var toolInstaller: ToolInstaller?
@@ -159,6 +159,7 @@ final class AppModel {
     var isPreviewingWallpaper = false   // the Library's panels are hidden for a clean look at the wallpaper
     var showsPreviewHandle = false
     var pendingConversion: URL?       // unreadable file waiting for the user's OK to convert with ffmpeg
+    @ObservationIgnored private var pendingConversionName: String?   // its title, kept for the converted copy
     var conversionPrompt = ""
     var showImporter = false
     var confirmSetWallpaper = false
@@ -177,6 +178,11 @@ final class AppModel {
     var linkCollection: LinkCollection?
     var selectedLinkVideoID: String?
     var linkThumbnails: [String: NSImage] = [:]
+    /// The Wallpaper Engine dialog: video wallpapers the user's Steam downloaded (see WallpaperEngine).
+    var showWorkshopImport = false
+    var workshopScan = WorkshopScan()
+    var isWorkshopScanning = false
+    var workshopThumbnails: [String: NSImage] = [:]
 
     /// What the desktop shows: the window's background when no library wallpaper is picked.
     var desktopAsset: AerialAsset? { assets.first { $0.id == desktopID } }
@@ -525,7 +531,7 @@ final class AppModel {
                     self.stopProgress()
                     if let old = self.convertedTempURL { try? FileManager.default.removeItem(at: old) }
                     self.convertedTempURL = destination   // deleted once it's saved, like an ffmpeg conversion
-                    self.sourceCredit = video
+                    self.sourceCredit = (video.credit, video.pageURL)
                     self.loadSource(destination, displayName: video.title)
                 }
             } catch {
@@ -717,6 +723,66 @@ final class AppModel {
                 }
             }
         }
+    }
+
+    // MARK: - Wallpaper Engine (Steam Workshop)
+
+    /// Opens the Wallpaper Engine dialog and looks for downloads again (new subscriptions show up this way).
+    func openWorkshopImport() {
+        guard !isBusy else { return }
+        showWorkshopImport = true
+        rescanWorkshop()
+    }
+
+    func rescanWorkshop() {
+        guard !isWorkshopScanning else { return }
+        isWorkshopScanning = true
+        Task.detached {
+            let scan = WallpaperEngine.scan()
+            await MainActor.run {
+                self.workshopScan = scan
+                self.isWorkshopScanning = false
+                Log.info("Wallpaper Engine: \(scan.videos.count) video wallpapers, \(scan.skipped) others in \(scan.sources)")
+                self.loadWorkshopThumbnails(scan.videos)
+            }
+        }
+    }
+
+    private func loadWorkshopThumbnails(_ videos: [WorkshopVideo]) {
+        let missing = videos.filter { workshopThumbnails[$0.id] == nil }
+        guard !missing.isEmpty else { return }
+        Task.detached {
+            for video in missing {
+                guard let preview = video.preview, let image = WallpaperEngine.thumbnail(preview) else { continue }
+                await MainActor.run { self.workshopThumbnails[video.id] = image }
+            }
+        }
+    }
+
+    /// Add Folder…: a Steam folder somewhere else (another bottle, an external disk) or a folder of wallpapers.
+    func addWorkshopFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.message = "Choose a Steam folder, its Wallpaper Engine downloads, or any folder of wallpapers."
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        if !WallpaperEngine.addedFolders.contains(folder) { WallpaperEngine.addedFolders.append(folder) }
+        rescanWorkshop()
+    }
+
+    /// The Workshop's video wallpapers, in Steam when it handles steam:// links, else in the browser.
+    func openWorkshopPage() {
+        let steam = NSWorkspace.shared.urlForApplication(toOpen: WallpaperEngine.workshopSteamPage) != nil
+        NSWorkspace.shared.open(steam ? WallpaperEngine.workshopSteamPage : WallpaperEngine.workshopWebPage)
+    }
+
+    /// Opens a Workshop video like a video the user added. The file stays where Steam put it and is only read.
+    func useWorkshopVideo(_ video: WorkshopVideo) {
+        guard !isBusy else { return }
+        showWorkshopImport = false
+        if let old = convertedTempURL { try? FileManager.default.removeItem(at: old); convertedTempURL = nil }
+        sourceCredit = ("a Steam Workshop creator", video.page?.absoluteString)
+        loadSource(video.video, displayName: video.title)
     }
 
     // MARK: - Helpers (yt-dlp, deno, ffmpeg)
@@ -998,6 +1064,7 @@ final class AppModel {
             return
         }
         pendingConversion = url
+        pendingConversionName = displayName
         conversionPrompt = "macOS can't play “\(url.lastPathComponent)” directly (\(reason)).\n\n"
             + "AerialSwap can convert it with ffmpeg (\(ffmpeg.path)) first. This takes roughly as long as the "
             + "video, needs a few GB of temporary disk space and drops the audio."
@@ -1011,7 +1078,9 @@ final class AppModel {
         let converter = FFmpegConverter()
         self.converter = converter
         transcodedURL = nil
-        displayName = source.deletingPathExtension().lastPathComponent
+        let name = pendingConversionName ?? source.deletingPathExtension().lastPathComponent
+        pendingConversionName = nil
+        displayName = name
         startProgress("Converting “\(source.lastPathComponent)” with ffmpeg", flow: .convert, step: .convert)
 
         Task.detached {
@@ -1023,7 +1092,7 @@ final class AppModel {
                     self.stopProgress()
                     if let old = self.convertedTempURL { try? FileManager.default.removeItem(at: old) }
                     self.convertedTempURL = destination
-                    self.loadSource(destination, displayName: source.deletingPathExtension().lastPathComponent)
+                    self.loadSource(destination, displayName: name)
                     self.notice = Notice(kind: .info, text: "Converted. Trim if you like, then set it as your wallpaper.")
                 }
             } catch {
@@ -1193,7 +1262,7 @@ final class AppModel {
         let settings = LibrarySettings(fps: outputFPS,
                                        motion: interpolates ? (effectiveMotionMode == .maximum ? "Maximum" : "Smooth") : nil,
                                        enhanced: enhances, smoothLoop: options.loopCrossfade > 0,
-                                       credit: sourceCredit?.credit, sourcePage: sourceCredit?.pageURL)
+                                       credit: sourceCredit?.credit, sourcePage: sourceCredit?.page)
         let destination = Self.workDir().appending(path: "\(UUID().uuidString).mov")
         let transcoder = Transcoder()
         self.transcoder = transcoder

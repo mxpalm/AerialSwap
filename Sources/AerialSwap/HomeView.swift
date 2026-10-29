@@ -331,7 +331,9 @@ private struct LibraryTile: View {
             Menu("Use For") { UseForItems(model: model, item: item) }
                 .disabled(model.isBusy)
             Divider()
-            if let page = item.sourcePage.flatMap(URL.init(string:)) { Link("View on Pixabay", destination: page) }
+            if let page = item.sourcePage.flatMap(URL.init(string:)) {
+                Link(page.host()?.hasSuffix("steamcommunity.com") == true ? "View on Steam Workshop" : "View on Pixabay", destination: page)
+            }
             Button("Delete from Library…", role: .destructive) { model.deleteCandidate = item }
         }
         .help("\(prettyName(item.name))\nSaved \(item.addedAt.formatted(date: .abbreviated, time: .shortened))"

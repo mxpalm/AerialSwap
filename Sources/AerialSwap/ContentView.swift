@@ -29,6 +29,7 @@ struct ContentView: View {
         .animation(animation(.snappy(duration: 0.2)), value: model.done)
         .animation(animation(.snappy(duration: 0.2)), value: model.showURLImport)
         .animation(animation(.snappy(duration: 0.2)), value: model.linkCollection)
+        .animation(animation(.snappy(duration: 0.2)), value: model.showWorkshopImport)
         .onAppear {
             model.refreshAssets()
             // Debug: `AerialSwap.app/Contents/MacOS/AerialSwap --open <video>` starts on the Configure screen.
@@ -115,6 +116,9 @@ struct ContentView: View {
         }
         if model.screen == .home, model.done == nil, let collection = model.linkCollection {
             LinkCollectionDialog(model: model, collection: collection)
+        }
+        if model.screen == .home, model.showWorkshopImport {
+            WorkshopImportDialog(model: model)
         }
         if model.workFlow == .quick {
             QuickBusyOverlay(phase: model.phase)
@@ -229,6 +233,7 @@ struct AddVideoMenu: View {
         Menu {
             Button("Video File…", systemImage: "folder") { before(); model.showImporter = true }
             Button("From URL…", systemImage: "link") { before(); model.openURLImport() }
+            Button("From Wallpaper Engine…", systemImage: "square.stack.3d.down.right") { before(); model.openWorkshopImport() }
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "plus")
@@ -241,7 +246,7 @@ struct AddVideoMenu: View {
         .buttonStyle(PillButtonStyle(kind: kind, height: height, fullWidth: fullWidth))
         .fixedSize(horizontal: !fullWidth, vertical: false)
         .disabled(model.isBusy)
-        .help("Add a video file from this Mac, or a video from a web address")
+        .help("Add a video file from this Mac, a video from a web address, or a Wallpaper Engine video wallpaper")
     }
 }
 

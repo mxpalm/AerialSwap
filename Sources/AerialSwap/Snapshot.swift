@@ -46,8 +46,21 @@ enum Snapshot {
                 m.urlImportText = "https://www.youtube.com/playlist?list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG"
                 m.showURLImport = true
             }),
-            ("05-configure", { m in
+            ("04g-workshop", { m in
                 m.showURLImport = false
+                let titles = ["Calm Ocean Waves", "Neon City Rain", "Misty Forest", "Northern Lights", "Desert Dunes", "Koi Pond"]
+                m.workshopScan = WorkshopScan(videos: titles.enumerated().map { i, title in
+                    WorkshopVideo(id: "\(3_000_000_000 + i)", title: title, video: URL(fileURLWithPath: "/tmp/\(i).\(i == 1 ? "webm" : "mp4")"),
+                                  preview: nil, rating: i == 1 ? "Questionable" : nil, size: 80_000_000, source: "CrossOver · Steam")
+                }, skipped: 3, sources: ["CrossOver · Steam"])
+                for (i, video) in m.workshopScan.videos.enumerated() {
+                    m.workshopThumbnails[video.id] = m.discoverThumbnails[m.discoverVideos[i % m.discoverVideos.count].id]
+                }
+                m.showWorkshopImport = true
+            }),
+            ("04h-workshop-empty", { m in m.workshopScan = WorkshopScan() }),
+            ("05-configure", { m in
+                m.showWorkshopImport = false
                 m.urlImportMode = .video
                 await load(m, footage.appending(path: "scene_1080p30.mov"))
                 m.displayName = "Mountain clouds"

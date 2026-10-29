@@ -27,6 +27,12 @@ When you agree to install helpers, AerialSwap runs Homebrew or downloads the off
   this repository, and downloads it from there when you choose **Update**. Nothing about you or your Mac is sent
   beyond a normal HTTPS request.
 
+- **Wallpaper Engine / Steam Workshop** (Add Video → From Wallpaper Engine): AerialSwap only reads video
+  wallpapers that the user's own Steam downloaded. It doesn't sign in to Steam, download from the Workshop or
+  contact Steam. Workshop wallpapers belong to their creators; use them only for yourself and don't share the
+  results. Wallpaper Engine is a trademark of Wallpaper Engine Team, Steam a trademark of Valve Corporation;
+  AerialSwap is an independent app, not affiliated with either.
+
 ## Content you add
 
 Apple's Aerial videos belong to Apple. AerialSwap never copies, changes or redistributes them. You are responsible for having the right to use any video you add, from a file,

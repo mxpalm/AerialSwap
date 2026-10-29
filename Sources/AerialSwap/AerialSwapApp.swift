@@ -50,6 +50,8 @@ struct AerialSwapApp: App {
                 Button("Add Video from URL…") { model.openURLImport() }
                     .keyboardShortcut("o", modifiers: [.command, .shift])
                     .disabled(model.isBusy || model.screen != .home)
+                Button("Add Video from Wallpaper Engine…") { model.openWorkshopImport() }
+                    .disabled(model.isBusy || model.screen != .home)
             }
         }
         .windowResizability(.contentMinSize)

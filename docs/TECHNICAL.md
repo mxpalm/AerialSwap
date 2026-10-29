@@ -109,6 +109,25 @@ exits with 1 because some entries failed (image pins); those are left out. yt-dl
 `Process` passes arguments decomposed (NFD), so a board named "Gefühl" wasn't found; `pin.it` links are followed and
 the path decoded first. Thumbnails load only over https.
 
+**Add Video → From Wallpaper Engine…** lists the video wallpapers the user's own Steam downloaded from the
+[Wallpaper Engine](https://www.wallpaperengine.io) Workshop, and opens the chosen one like a video you added
+(`WallpaperEngine.swift`). AerialSwap doesn't log in to Steam and downloads nothing: the user subscribes in Steam,
+and AerialSwap reads `steamapps/workshop/content/431960/<item>/` in
+- the Windows Steam of Sevoflurane, CrossOver and Whisky bottles (`drive_c/Program Files (x86)/Steam`, plus the
+  libraries in `libraryfolders.vdf`, with Windows drive letters resolved through the bottle's `dosdevices`);
+- Steam for Mac (`~/Library/Application Support/Steam`);
+- folders added with **Add Folder…** (a Steam folder, its `steamapps`, or any folder of wallpaper folders; kept in
+  the `WorkshopFolders` default).
+
+Only `type: video` items are used (MP4, MOV, M4V, WebM, MKV; WebM and MKV go through the usual ffmpeg conversion);
+scene, web and application wallpapers are counted and skipped, and nothing in a download is ever run. Downloads are
+untrusted (anyone can upload to the Workshop): only `project.json` is parsed (at most 1 MB), the video and preview
+paths must stay inside the item's folder after resolving symlinks, titles are stripped of control characters and
+cut to 120 characters, and previews are decoded as small thumbnails. The file stays where Steam put it and is only
+read. The library credits "a Steam Workshop creator" and links the item's Workshop page (right-click → **View on
+Steam Workshop**). Downloading through Valve's `steamcmd` instead was ruled out for now: its macOS build is Intel-only
+and needs Rosetta, which macOS 28 drops for apps.
+
 **Discover:** free videos from [Pixabay](https://pixabay.com/). Pick a topic (Featured, From Above, Mountains, …)
 or search, then pick a video to preview it full size (a smaller version, at least 1280 px wide, is streamed). **Use This Video** downloads
 the 4K version (1080p when Pixabay has no 4K) into the temp folder and opens it like a video you added: trim, pick

@@ -22,7 +22,8 @@ Aerials stay untouched.
 
 ## What you can do
 
-- **Use any video.** Drag a video onto the window, paste a link, or pick a free video inside the app.
+- **Use any video.** Drag a video onto the window, paste a link, pick a free video inside the app, or use a video
+  wallpaper you subscribed to in Wallpaper Engine.
 - **Pick the best part.** Trim the video to the few seconds you like.
 - **No jump when it repeats.** AerialSwap blends the end into the beginning, so the loop looks seamless.
 - **Smooth slow-down.** It adds in-between frames, so the video glides to a stop when you unlock, like Apple's.
@@ -53,6 +54,10 @@ You need a Mac with Apple Silicon (M1 or later) and macOS 27.
 Drag a video file anywhere onto the AerialSwap window, or click **Add Video**. You can also add a video from a
 link (**Add Video → From URL…**), or find a free one under **Discover** (see below). For a playlist, a Pinterest
 board or a channel, switch the dialog to **Playlist or Board**: you see its videos and pick one.
+
+Using [Wallpaper Engine](https://www.wallpaperengine.io) through Steam (for example with CrossOver or Whisky)?
+**Add Video → From Wallpaper Engine…** shows the video wallpapers you subscribed to on its Workshop. AerialSwap
+doesn't sign in to Steam or download anything itself, and it can't use scene or web wallpapers.
 
 Any length works. Videos in 4K, filmed in landscape (wider than tall) with slow camera movement, look best.
 

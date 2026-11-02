@@ -160,6 +160,8 @@ final class URLImporter: @unchecked Sendable {
     func inspect(_ url: URL, into directory: URL) async throws -> LinkContents {
         guard let ytdlp = YTDLP.find(), await !Self.isVideoFile(url) else { return .video(info: nil) }
         await updateIfOwnCopy(ytdlp)
+        let addressFile = try await Self.addressFile(for: url, in: directory)
+        defer { try? FileManager.default.removeItem(at: addressFile) }
         let info = directory.appending(path: "url-\(UUID().uuidString).info.json")
         FileManager.default.createFile(atPath: info.path, contents: nil)
         let output = try FileHandle(forWritingTo: info)
@@ -169,7 +171,7 @@ final class URLImporter: @unchecked Sendable {
         let p = Self.process(ytdlp, [
             "-J", "--flat-playlist", "--no-playlist", "--no-warnings",
             "-I", "1:\(Self.collectionLimit)",
-            "--", await Self.address(for: url),   // never read as an option
+            "-a", addressFile.path,
         ])
         p.standardOutput = output
         let errors = ResultBox()
@@ -222,6 +224,15 @@ final class URLImporter: @unchecked Sendable {
         return try await runYTDLP(ytdlp, url: url, section: section, info: info, directory: directory, progress: progress)
     }
 
+    /// The address for yt-dlp, in a file it reads it from (-a). Not an argument: Process passes arguments decomposed
+    /// (NFD), so "ü" arrives as "u" plus a combining mark and Pinterest doesn't find a board named "Gefühl".
+    /// A file also can't be mistaken for an option.
+    private static func addressFile(for url: URL, in directory: URL) async throws -> URL {
+        let file = directory.appending(path: "url-\(UUID().uuidString).address.txt")
+        try Data((await address(for: url) + "\n").utf8).write(to: file)
+        return file
+    }
+
     /// The address handed to yt-dlp: short links (pin.it) followed to where they lead, and the path decoded.
     /// Some of yt-dlp's extractors pass names from the path on as they are, so a board named "Gefühl" reached Pinterest
     /// as "gef%C3%BChl" and wasn't found.
@@ -255,8 +266,9 @@ final class URLImporter: @unchecked Sendable {
         // Only that part: ffmpeg copies the streams from the nearest keyframe (no re-encode, so it's fast).
         let sectionArguments = section.map { ["--download-sections", "*\($0.start ?? 0)-\($0.end.map { "\($0)" } ?? "inf")"] } ?? []
         // The page as inspect saw it, or the link itself.
-        let address = info == nil ? await Self.address(for: url) : ""
-        let source = info.map { ["--load-info-json", $0.path] } ?? ["--", address]   // "--": never read as an option
+        let addressFile = info == nil ? try await Self.addressFile(for: url, in: directory) : nil
+        defer { if let addressFile { try? FileManager.default.removeItem(at: addressFile) } }
+        let source = info.map { ["--load-info-json", $0.path] } ?? ["-a", addressFile!.path]
         let p = Self.process(ytdlp, sectionArguments + [
             // One video, also when the link is a playlist (--no-playlist alone still downloads a whole playlist).
             "--no-playlist", "-I", "1", "--no-warnings", "--newline", "--progress",

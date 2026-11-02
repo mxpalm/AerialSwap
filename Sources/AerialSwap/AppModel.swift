@@ -166,6 +166,11 @@ final class AppModel {
     var urlImportText = ""
     var urlImportStart = ""               // optional part of the video, e.g. "1:00"
     var urlImportEnd = ""
+    var isInspectingLink = false          // yt-dlp is looking at the link (the dialog stays open meanwhile)
+    /// The videos at a link that holds several (a playlist, board, channel, …), to pick one from.
+    var linkCollection: LinkCollection?
+    var selectedLinkVideoID: String?
+    var linkThumbnails: [String: NSImage] = [:]
 
     /// What the desktop shows: the window's background when no library wallpaper is picked.
     var desktopAsset: AerialAsset? { assets.first { $0.id == desktopID } }
@@ -534,7 +539,8 @@ final class AppModel {
 
     /// Opens the Add from URL dialog, filled in with a web address from the clipboard if there is one.
     func openURLImport() {
-        guard !isBusy else { return }
+        guard !isBusy, !isInspectingLink else { return }
+        closeLinkCollection()
         let clipboard = NSPasteboard.general.string(forType: .string) ?? ""
         urlImportText = URLImporter.webAddress(clipboard) != nil ? clipboard.trimmingCharacters(in: .whitespacesAndNewlines) : ""
         urlImportStart = ""
@@ -559,12 +565,107 @@ final class AppModel {
         return nil
     }
 
-    /// Downloads a video from a web address (a video file, or a page via yt-dlp) and opens it like an added video.
-    /// With a start or end time, only that part is downloaded.
+    /// Imports a video from a web address (a video file, or a page via yt-dlp) and opens it like an added video.
+    /// A link that holds several videos (a playlist, board, channel, …) shows them to pick one from first.
+    /// With a start or end time, it's one video and only that part is downloaded.
     func importURL(_ text: String) {
-        guard !isBusy else { return }
+        guard !isBusy, !isInspectingLink else { return }
         guard let url = URLImporter.webAddress(text) else { fail(URLImportError.notAWebAddress); return }
         let section = YTDLP.canDownloadSections ? urlImportSection : nil
+        guard section == nil, YTDLP.find() != nil else { downloadURL(url, section: section); return }
+        // The dialog shows that the link is being looked at, also for links dropped from a browser.
+        urlImportText = url.absoluteString
+        showURLImport = true
+        isInspectingLink = true
+        let importer = URLImporter()
+        urlImporter = importer
+        let directory = Self.workDir()
+        Task.detached {
+            do {
+                let contents = try await importer.inspect(url, into: directory)
+                await MainActor.run {
+                    guard self.urlImporter === importer else { return }   // cancelled meanwhile
+                    self.isInspectingLink = false
+                    switch contents {
+                    case .video(let info): self.downloadURL(url, section: nil, info: info)
+                    case .collection(let collection) where collection.videos.count == 1:
+                        self.downloadURL(collection.videos[0].url, section: nil)
+                    case .collection(let collection) where collection.videos.isEmpty:
+                        self.fail(URLImportError.failed("There are no videos at this link."))
+                    case .collection(let collection): self.showLinkCollection(collection)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    guard self.urlImporter === importer else { return }
+                    self.isInspectingLink = false
+                    if case URLImportError.cancelled = error { return }
+                    self.fail(error)
+                }
+            }
+        }
+    }
+
+    /// Cancel in the Add from URL dialog: also stops looking at the link.
+    func closeURLImport() {
+        if isInspectingLink {
+            urlImporter?.cancel()
+            urlImporter = nil
+            isInspectingLink = false
+        }
+        showURLImport = false
+    }
+
+    private func showLinkCollection(_ collection: LinkCollection) {
+        showURLImport = false
+        linkCollection = collection
+        selectedLinkVideoID = nil
+        linkThumbnails = [:]
+        for video in collection.videos {
+            guard let url = video.thumbnail else { continue }
+            Task { if let image = await Self.remoteImage(url), linkCollection == collection { linkThumbnails[video.id] = image } }
+        }
+    }
+
+    var selectedLinkVideo: LinkVideo? { linkCollection?.videos.first { $0.id == selectedLinkVideoID } }
+
+    /// Selecting a video again deselects it.
+    func selectLinkVideo(_ video: LinkVideo) {
+        selectedLinkVideoID = video.id == selectedLinkVideoID ? nil : video.id
+    }
+
+    /// Downloads the picked video from what the list knew about it, or else imports its own link (which may itself
+    /// hold several, e.g. a channel's playlists).
+    func importSelectedLinkVideo() {
+        guard !isBusy, let video = selectedLinkVideo else { return }
+        closeLinkCollection()
+        if let data = video.info {
+            let info = Self.workDir().appending(path: "url-\(UUID().uuidString).info.json")
+            if (try? data.write(to: info)) != nil {
+                downloadURL(video.url, section: YTDLP.canDownloadSections ? urlImportSection : nil, info: info)
+                return
+            }
+        }
+        importURL(video.url.absoluteString)
+    }
+
+    /// Back: the Add from URL dialog with the link again.
+    func backFromLinkCollection() {
+        let link = linkCollection?.link.absoluteString
+        closeLinkCollection()
+        if let link { urlImportText = link }
+        showURLImport = true
+    }
+
+    func closeLinkCollection() {
+        linkCollection = nil
+        selectedLinkVideoID = nil
+        linkThumbnails = [:]
+    }
+
+    /// Downloads one video from a web address; `info` is yt-dlp's look at it from `importURL`.
+    private func downloadURL(_ url: URL, section: (start: Double?, end: Double?)?, info: URL? = nil) {
+        guard !isBusy else { return }
         showURLImport = false
         let importer = URLImporter()
         urlImporter = importer
@@ -581,7 +682,7 @@ final class AppModel {
 
         Task.detached {
             do {
-                let (file, title) = try await importer.run(url, section: section, into: directory) { p in
+                let (file, title) = try await importer.run(url, section: section, info: info, into: directory) { p in
                     Task { @MainActor in self.progress = p }
                 }
                 await MainActor.run {

@@ -34,8 +34,13 @@ enum Snapshot {
                 m.urlImportStart = "1:30"; m.urlImportEnd = "1:45"
                 m.showURLImport = true
             }),
-            ("05-configure", { m in
+            ("04e-link-collection", { m in
                 m.showURLImport = false
+                m.linkCollection = linkSample
+                m.selectedLinkVideoID = linkSample.videos[1].id
+            }),
+            ("05-configure", { m in
+                m.linkCollection = nil
                 await load(m, footage.appending(path: "scene_1080p30.mov"))
                 m.displayName = "Mountain clouds"
                 m.trimStart = min(2, m.trimEnd / 5); m.trimEnd *= 0.85
@@ -163,5 +168,27 @@ enum Snapshot {
             model.backdrops["discover-\(video.id)"] = await frame(url, large: true)
         }
         model.discoverTotal = 240
+
+        for (index, video) in linkSample.videos.enumerated() {
+            let files = ["scene_2160p30.mov", "src_portrait30.mov", "src_1080p24.mov", "hdr_hlg1080.mov", "src_wide24.mov",
+                         "scene_720p30.mov", "src_2160p60.mov", "src_1080p30.mov"]
+            model.linkThumbnails[video.id] = await frame(footage.appending(path: files[index % files.count]), large: false)
+        }
     }
+
+    /// A board as yt-dlp lists it: sizes for some videos, not for others.
+    private static let linkSample: LinkCollection = {
+        let samples: [(String, Double, Int?, Int?, String?)] = [
+            ("Fog rolling over the ridge", 42, 3840, 2160, "Alpine Light"), ("Waterfall, slow shutter", 18, 1080, 1920, "Studio Nord"),
+            ("Pine forest at dawn", 61, 1920, 1080, "Alpine Light"), ("Harbour lights", 27, nil, nil, nil),
+            ("Salt flats from above", 35, 3840, 1634, "Drone Diaries"), ("Rain on the window", 120, 1280, 720, nil),
+            ("Northern lights timelapse", 54, 3840, 2160, "Arctic Frames"), ("Sand dunes at noon", 23, nil, nil, "Drone Diaries"),
+        ]
+        let videos = samples.enumerated().map { index, s in
+            LinkVideo(id: "pin\(index)", title: s.0, url: URL(string: "https://example.invalid/pin/\(index)")!,
+                      duration: s.1, width: s.2, height: s.3, thumbnail: nil, uploader: s.4)
+        }
+        return LinkCollection(title: "Calm wallpapers", link: URL(string: "https://www.pinterest.com/someone/calm-wallpapers/")!,
+                              videos: videos, total: 8)
+    }()
 }

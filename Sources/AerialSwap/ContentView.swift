@@ -28,6 +28,7 @@ struct ContentView: View {
         .animation(animation(.snappy(duration: 0.2)), value: model.notice)
         .animation(animation(.snappy(duration: 0.2)), value: model.done)
         .animation(animation(.snappy(duration: 0.2)), value: model.showURLImport)
+        .animation(animation(.snappy(duration: 0.2)), value: model.linkCollection)
         .onAppear {
             model.refreshAssets()
             // Debug: `AerialSwap.app/Contents/MacOS/AerialSwap --open <video>` starts on the Configure screen.
@@ -91,6 +92,9 @@ struct ContentView: View {
         }
         if model.screen == .home, model.showURLImport {
             URLImportDialog(model: model)
+        }
+        if model.screen == .home, model.done == nil, let collection = model.linkCollection {
+            LinkCollectionDialog(model: model, collection: collection)
         }
         if model.workFlow == .quick {
             QuickBusyOverlay(phase: model.phase)

@@ -128,16 +128,20 @@ struct WorkingView: View {
 // MARK: - Dialogs
 
 /// A frosted dialog centered over a dimmed screen.
-private struct DialogContainer<Content: View>: View {
+struct DialogContainer<Content: View>: View {
+    var maxWidth: CGFloat = 560
     let content: Content
-    init(@ViewBuilder content: () -> Content) { self.content = content() }
+    init(maxWidth: CGFloat = 560, @ViewBuilder content: () -> Content) {
+        self.maxWidth = maxWidth
+        self.content = content()
+    }
 
     var body: some View {
         ZStack {
             Color.black.opacity(0.35).ignoresSafeArea().accessibilityHidden(true)
             content
                 .padding(24)
-                .frame(maxWidth: 560)
+                .frame(maxWidth: maxWidth)
                 .glassPanel(cornerRadius: 24, opacity: 0.76)
                 .shadow(color: .black.opacity(0.4), radius: 40, y: 20)
                 .padding(24)
@@ -146,7 +150,8 @@ private struct DialogContainer<Content: View>: View {
     }
 }
 
-/// Add from URL: a link to a video file, or a web page that yt-dlp can download from.
+/// Add from URL: a link to a video file, or a web page that yt-dlp can download from. Links that hold several videos
+/// (playlists, boards, channels, …) open LinkCollectionDialog to pick one.
 struct URLImportDialog: View {
     @Bindable var model: AppModel
     @FocusState private var fieldFocused: Bool
@@ -158,7 +163,8 @@ struct URLImportDialog: View {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Add from URL").font(.system(size: 22, weight: .bold))
-                    Text("A link to a video file, or a page on YouTube, Vimeo and many other sites.")
+                    Text("A link to a video file, or a page on YouTube, Vimeo and many other sites. "
+                         + "For a playlist, board or channel, you pick a video from it.")
                         .font(.system(size: 14)).foregroundStyle(Theme.secondary)
                 }
                 HStack(spacing: 8) {
@@ -172,16 +178,26 @@ struct URLImportDialog: View {
                 .padding(.horizontal, 14)
                 .frame(height: 40)
                 .background(Capsule().fill(Color.white.opacity(0.1)))
+                .disabled(model.isInspectingLink)
                 toolHint
-                sectionFields
+                sectionFields.disabled(model.isInspectingLink)
                 HStack(spacing: 10) {
                     Text("Only use videos you're allowed to use.").font(.system(size: 12)).foregroundStyle(Theme.secondary)
                     Spacer(minLength: 0)
-                    Button("Cancel") { model.showURLImport = false }
+                    Button("Cancel") { model.closeURLImport() }
                         .buttonStyle(PillButtonStyle(kind: .quiet, height: 42))
                         .fixedSize()
                         .keyboardShortcut(.cancelAction)
-                    Button("Download") { model.importURL(model.urlImportText) }
+                    Button { model.importURL(model.urlImportText) } label: {
+                        if model.isInspectingLink {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("Looking at the Link…")
+                            }
+                        } else {
+                            Text("Download")
+                        }
+                    }
                         .buttonStyle(PillButtonStyle(kind: .primary, height: 42))
                         .fixedSize()
                         .keyboardShortcut(.defaultAction)

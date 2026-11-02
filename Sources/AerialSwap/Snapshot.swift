@@ -37,10 +37,18 @@ enum Snapshot {
             ("04e-link-collection", { m in
                 m.showURLImport = false
                 m.linkCollection = linkSample
-                m.selectedLinkVideoID = linkSample.videos[1].id
+                m.selectLinkVideo(linkSample.videos[2])
+                m.urlImportStart = "0:10"; m.urlImportEnd = "0:40"
+            }),
+            ("04f-url-import-playlist", { m in
+                m.linkCollection = nil
+                m.urlImportMode = .collection
+                m.urlImportText = "https://www.youtube.com/playlist?list=PLx0sYbCqOb8TBPRdmBHs5Iftvv9TPboYG"
+                m.showURLImport = true
             }),
             ("05-configure", { m in
-                m.linkCollection = nil
+                m.showURLImport = false
+                m.urlImportMode = .video
                 await load(m, footage.appending(path: "scene_1080p30.mov"))
                 m.displayName = "Mountain clouds"
                 m.trimStart = min(2, m.trimEnd / 5); m.trimEnd *= 0.85

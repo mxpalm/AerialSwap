@@ -150,29 +150,41 @@ struct DialogContainer<Content: View>: View {
     }
 }
 
-/// Add from URL: a link to a video file, or a web page that yt-dlp can download from. Links that hold several videos
-/// (playlists, boards, channels, …) open LinkCollectionDialog to pick one.
+/// Add from URL: one video (a link to a video file, or a web page that yt-dlp can download from), or a playlist,
+/// board or channel, whose videos LinkCollectionDialog shows to pick one. The switcher at the top picks which.
 struct URLImportDialog: View {
     @Bindable var model: AppModel
     @FocusState private var fieldFocused: Bool
 
     private var isValid: Bool { URLImporter.webAddress(model.urlImportText) != nil }
+    private var isCollection: Bool { model.urlImportMode == .collection }
+    private var canSubmit: Bool { isValid && (isCollection || model.urlImportSectionProblem == nil) }
 
     var body: some View {
         DialogContainer {
             VStack(alignment: .leading, spacing: 16) {
+                PillPicker(options: [.init(value: URLImportMode.video, title: "One Video"),
+                                     .init(value: .collection, title: "Playlist or Board")],
+                           selection: $model.urlImportMode, label: "What the link is", fill: true)
+                    .padding(3)
+                    .background(Capsule().fill(Color.white.opacity(0.08)))
+                    .disabled(model.isInspectingLink)
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Add from URL").font(.system(size: 22, weight: .bold))
-                    Text("A link to a video file, or a page on YouTube, Vimeo and many other sites. "
-                         + "For a playlist, board or channel, you pick a video from it.")
+                    Text(isCollection ? "Add from a Playlist" : "Add from URL").font(.system(size: 22, weight: .bold))
+                    Text(isCollection
+                         ? "A playlist, board, channel or collection on YouTube, Pinterest, Vimeo and many other sites. "
+                            + "You see its videos and pick one."
+                         : "A link to a video file, or a page on YouTube, Vimeo and many other sites.")
                         .font(.system(size: 14)).foregroundStyle(Theme.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 HStack(spacing: 8) {
-                    Image(systemName: "link").foregroundStyle(Theme.secondary).accessibilityHidden(true)
+                    Image(systemName: isCollection ? "rectangle.stack" : "link").foregroundStyle(Theme.secondary)
+                        .accessibilityHidden(true)
                     RenderableTextField("https://", text: $model.urlImportText, flat: model.isSnapshot)
                         .textFieldStyle(.plain)
                         .focused($fieldFocused)
-                        .onSubmit { if isValid && model.urlImportSectionProblem == nil { model.importURL(model.urlImportText) } }
+                        .onSubmit(submit)
                 }
                 .font(.system(size: 14))
                 .padding(.horizontal, 14)
@@ -180,7 +192,12 @@ struct URLImportDialog: View {
                 .background(Capsule().fill(Color.white.opacity(0.1)))
                 .disabled(model.isInspectingLink)
                 toolHint
-                sectionFields.disabled(model.isInspectingLink)
+                if isCollection {
+                    Label("You can choose which part of the video to download after picking it.", systemImage: "scissors")
+                        .font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                } else {
+                    DownloadPartFields(model: model, onSubmit: submit)
+                }
                 HStack(spacing: 10) {
                     Text("Only use videos you're allowed to use.").font(.system(size: 12)).foregroundStyle(Theme.secondary)
                     Spacer(minLength: 0)
@@ -188,28 +205,65 @@ struct URLImportDialog: View {
                         .buttonStyle(PillButtonStyle(kind: .quiet, height: 42))
                         .fixedSize()
                         .keyboardShortcut(.cancelAction)
-                    Button { model.importURL(model.urlImportText) } label: {
+                    Button(action: submit) {
                         if model.isInspectingLink {
                             HStack(spacing: 8) {
                                 ProgressView().controlSize(.small)
-                                Text("Looking at the Link…")
+                                Text("Finding Videos…")
                             }
                         } else {
-                            Text("Download")
+                            Text(isCollection ? "Show Videos" : "Download")
                         }
                     }
                         .buttonStyle(PillButtonStyle(kind: .primary, height: 42))
                         .fixedSize()
                         .keyboardShortcut(.defaultAction)
-                        .disabled(!isValid || model.urlImportSectionProblem != nil)
+                        .disabled(!canSubmit)
                 }
             }
         }
         .onAppear { fieldFocused = true }
     }
 
-    /// Optional start and end, so a long video isn't downloaded whole (needs yt-dlp and ffmpeg).
-    @ViewBuilder private var sectionFields: some View {
+    private func submit() {
+        guard canSubmit else { return }
+        if isCollection { model.findLinkVideos(model.urlImportText) } else { model.importURL(model.urlImportText) }
+    }
+
+    /// Whether web pages work: yt-dlp (with deno and ffmpeg) is optional, direct video links always work.
+    /// Missing helpers can be installed from here.
+    @ViewBuilder private var toolHint: some View {
+        let missing = Tool.missingForURLImport
+        if missing.isEmpty {
+            Label(isCollection ? "Playlists are read with yt-dlp: the first \(URLImporter.collectionLimit) videos at most."
+                               : "Pages are downloaded with yt-dlp: the best video up to 4K, without sound.",
+                  systemImage: "checkmark.circle")
+                .font(.system(size: 12)).foregroundStyle(Theme.secondary)
+        } else {
+            HStack(spacing: 10) {
+                Label(YTDLP.find() == nil
+                      ? (isCollection ? "Playlists and boards need yt-dlp."
+                                      : "Only direct video links work right now. YouTube, Vimeo and others need yt-dlp.")
+                      : "Missing \(ListFormatter.localizedString(byJoining: missing.map(\.rawValue))) for some sites and for parts of videos.",
+                      systemImage: "info.circle")
+                    .font(.system(size: 12)).foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button("Install…") { model.requestURLImportTools() }
+                    .buttonStyle(PillButtonStyle(kind: .secondary, height: 30))
+                    .fixedSize()
+            }
+        }
+    }
+}
+
+/// "Only download 1:30 to 1:45": an optional part, so a long video isn't downloaded whole (needs yt-dlp and ffmpeg).
+/// In the Add from URL dialog for one video, and in LinkCollectionDialog once a video is picked.
+struct DownloadPartFields: View {
+    @Bindable var model: AppModel
+    var onSubmit: () -> Void
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 Text("Only download").font(.system(size: 13, weight: .semibold))
@@ -218,10 +272,10 @@ struct URLImportDialog: View {
                 timeField("end", text: $model.urlImportEnd)
                 Spacer(minLength: 0)
             }
-            .disabled(!YTDLP.canDownloadSections)
+            .disabled(!YTDLP.canDownloadSections || model.isInspectingLink)
             Group {
                 if !YTDLP.canDownloadSections {
-                    Text("Downloading only part of a video needs yt-dlp and ffmpeg (Install… above).")
+                    Text("Downloading only part of a video needs yt-dlp and ffmpeg.")
                         .foregroundStyle(Theme.secondary)
                 } else if let problem = model.urlImportSectionProblem {
                     Text(problem).foregroundStyle(Theme.warning)
@@ -240,30 +294,7 @@ struct URLImportDialog: View {
             .multilineTextAlignment(.center)
             .frame(width: 72, height: 30)
             .background(Capsule().fill(Color.white.opacity(0.1)))
-            .onSubmit { if isValid && model.urlImportSectionProblem == nil { model.importURL(model.urlImportText) } }
-    }
-
-    /// Whether web pages work: yt-dlp (with deno and ffmpeg) is optional, direct video links always work.
-    /// Missing helpers can be installed from here.
-    @ViewBuilder private var toolHint: some View {
-        let missing = Tool.missingForURLImport
-        if missing.isEmpty {
-            Label("Pages are downloaded with yt-dlp: the best video up to 4K, without sound.", systemImage: "checkmark.circle")
-                .font(.system(size: 12)).foregroundStyle(Theme.secondary)
-        } else {
-            HStack(spacing: 10) {
-                Label(YTDLP.find() == nil
-                      ? "Only direct video links work right now. YouTube, Vimeo and others need yt-dlp."
-                      : "Missing \(ListFormatter.localizedString(byJoining: missing.map(\.rawValue))) for some sites and for parts of videos.",
-                      systemImage: "info.circle")
-                    .font(.system(size: 12)).foregroundStyle(Theme.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-                Button("Install…") { model.requestURLImportTools() }
-                    .buttonStyle(PillButtonStyle(kind: .secondary, height: 30))
-                    .fixedSize()
-            }
-        }
+            .onSubmit(onSubmit)
     }
 }
 

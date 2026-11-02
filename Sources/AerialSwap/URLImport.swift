@@ -234,7 +234,8 @@ final class URLImporter: @unchecked Sendable {
         // The page as inspect saw it, or the link itself.
         let source = info.map { ["--load-info-json", $0.path] } ?? ["--", url.absoluteString]   // "--": never read as an option
         let p = Self.process(ytdlp, sectionArguments + [
-            "--no-playlist", "--no-warnings", "--newline", "--progress",
+            // One video, also when the link is a playlist (--no-playlist alone still downloads a whole playlist).
+            "--no-playlist", "-I", "1", "--no-warnings", "--newline", "--progress",
             // Best video-only stream up to 4K (no audio, so nothing has to be merged), else the best combined one.
             "-f", "bv*[height<=2160]/b[height<=2160]/bv*/b",
             "-o", directory.appending(path: "url-\(UUID().uuidString).%(ext)s").path,

@@ -27,6 +27,9 @@ enum Screen { case intro, home, configure, working }
 /// The sections of the home screen (the switcher in the top bar).
 enum HomeSection { case library, discover }
 
+/// What the Add from URL dialog gets from a link: one video, or the videos of a playlist, board, … to pick from.
+enum URLImportMode { case video, collection }
+
 /// Long-running work and which screen shows it.
 enum WorkFlow { case download, tools, convert, newVideo, saveOnly, quick }
 
@@ -166,6 +169,7 @@ final class AppModel {
     var urlImportText = ""
     var urlImportStart = ""               // optional part of the video, e.g. "1:00"
     var urlImportEnd = ""
+    var urlImportMode = URLImportMode.video   // kept between openings of the dialog
     var isInspectingLink = false          // yt-dlp is looking at the link (the dialog stays open meanwhile)
     /// The videos at a link that holds several (a playlist, board, channel, …), to pick one from.
     var linkCollection: LinkCollection?
@@ -562,20 +566,26 @@ final class AppModel {
         let start = URLImporter.seconds(startText), end = URLImporter.seconds(endText)
         if (!startText.isEmpty && start == nil) || (!endText.isEmpty && end == nil) { return "Use times like 1:30 or 90." }
         if let start, let end, end <= start { return "The end has to be after the start." }
+        if linkCollection != nil, let duration = selectedLinkVideo?.duration, let start, start >= duration {
+            return "The video is only \(clockText(duration)) long."
+        }
         return nil
     }
 
-    /// Imports a video from a web address (a video file, or a page via yt-dlp) and opens it like an added video.
-    /// A link that holds several videos (a playlist, board, channel, …) shows them to pick one from first.
-    /// With a start or end time, it's one video and only that part is downloaded.
+    /// Downloads one video from a web address (a video file, or a page via yt-dlp) and opens it like an added video.
+    /// With a start or end time, only that part is downloaded.
     func importURL(_ text: String) {
         guard !isBusy, !isInspectingLink else { return }
         guard let url = URLImporter.webAddress(text) else { fail(URLImportError.notAWebAddress); return }
-        let section = YTDLP.canDownloadSections ? urlImportSection : nil
-        guard section == nil, YTDLP.find() != nil else { downloadURL(url, section: section); return }
-        // The dialog shows that the link is being looked at, also for links dropped from a browser.
-        urlImportText = url.absoluteString
-        showURLImport = true
+        downloadURL(url, section: YTDLP.canDownloadSections ? urlImportSection : nil)
+    }
+
+    /// Lists the videos at a playlist, board, channel, … link to pick one from (LinkCollectionDialog).
+    /// A link to a single video is downloaded right away.
+    func findLinkVideos(_ text: String) {
+        guard !isBusy, !isInspectingLink else { return }
+        guard let url = URLImporter.webAddress(text) else { fail(URLImportError.notAWebAddress); return }
+        guard YTDLP.find() != nil else { requestURLImportTools(); return }
         isInspectingLink = true
         let importer = URLImporter()
         urlImporter = importer
@@ -588,8 +598,6 @@ final class AppModel {
                     self.isInspectingLink = false
                     switch contents {
                     case .video(let info): self.downloadURL(url, section: nil, info: info)
-                    case .collection(let collection) where collection.videos.count == 1:
-                        self.downloadURL(collection.videos[0].url, section: nil)
                     case .collection(let collection) where collection.videos.isEmpty:
                         self.fail(URLImportError.failed("There are no videos at this link."))
                     case .collection(let collection): self.showLinkCollection(collection)
@@ -619,8 +627,10 @@ final class AppModel {
     private func showLinkCollection(_ collection: LinkCollection) {
         showURLImport = false
         linkCollection = collection
-        selectedLinkVideoID = nil
+        selectedLinkVideoID = collection.videos.count == 1 ? collection.videos[0].id : nil
         linkThumbnails = [:]
+        urlImportStart = ""
+        urlImportEnd = ""
         for video in collection.videos {
             guard let url = video.thumbnail else { continue }
             Task { if let image = await Self.remoteImage(url), linkCollection == collection { linkThumbnails[video.id] = image } }
@@ -629,30 +639,33 @@ final class AppModel {
 
     var selectedLinkVideo: LinkVideo? { linkCollection?.videos.first { $0.id == selectedLinkVideoID } }
 
-    /// Selecting a video again deselects it.
+    /// Selecting a video again deselects it. The part to download is asked per video, so it starts empty.
     func selectLinkVideo(_ video: LinkVideo) {
         selectedLinkVideoID = video.id == selectedLinkVideoID ? nil : video.id
+        urlImportStart = ""
+        urlImportEnd = ""
     }
 
-    /// Downloads the picked video from what the list knew about it, or else imports its own link (which may itself
-    /// hold several, e.g. a channel's playlists).
+    /// Downloads the picked video (only the part typed under the grid, if any): from what the list knew about it,
+    /// or else through its own link.
     func importSelectedLinkVideo() {
-        guard !isBusy, let video = selectedLinkVideo else { return }
+        guard !isBusy, let video = selectedLinkVideo, urlImportSectionProblem == nil else { return }
+        let section = YTDLP.canDownloadSections ? urlImportSection : nil
         closeLinkCollection()
+        var info: URL?
         if let data = video.info {
-            let info = Self.workDir().appending(path: "url-\(UUID().uuidString).info.json")
-            if (try? data.write(to: info)) != nil {
-                downloadURL(video.url, section: YTDLP.canDownloadSections ? urlImportSection : nil, info: info)
-                return
-            }
+            let file = Self.workDir().appending(path: "url-\(UUID().uuidString).info.json")
+            if (try? data.write(to: file)) != nil { info = file }
         }
-        importURL(video.url.absoluteString)
+        downloadURL(video.url, section: section, info: info)
     }
 
     /// Back: the Add from URL dialog with the link again.
     func backFromLinkCollection() {
         let link = linkCollection?.link.absoluteString
         closeLinkCollection()
+        urlImportStart = ""
+        urlImportEnd = ""
         if let link { urlImportText = link }
         showURLImport = true
     }

@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// The videos at a link that holds several (a playlist, board, channel, …), found by yt-dlp: pick one to import it.
+/// The videos at a link that holds several (a playlist, board, channel, …), found by yt-dlp: pick one, optionally
+/// choose which part of it to download, and import it.
 struct LinkCollectionDialog: View {
     @Bindable var model: AppModel
     let collection: LinkCollection
@@ -29,7 +30,7 @@ struct LinkCollectionDialog: View {
         let host = collection.link.host()?.replacingOccurrences(of: "www.", with: "") ?? "this page"
         let shown = collection.videos.count
         let count = collection.total > shown ? "The first \(shown) of \(collection.total.formatted()) videos" : "\(shown) videos"
-        return "\(count) on \(host). Pick one to download it."
+        return "\(count) on \(host). Pick one to download it. Only use videos you're allowed to use."
     }
 
     @ViewBuilder private var grid: some View {
@@ -41,8 +42,14 @@ struct LinkCollectionDialog: View {
     }
 
     private var footer: some View {
-        HStack(spacing: 10) {
-            Text("Only use videos you're allowed to use.").font(.system(size: 12)).foregroundStyle(Theme.secondary)
+        HStack(alignment: .bottom, spacing: 10) {
+            if model.selectedLinkVideo != nil {
+                DownloadPartFields(model: model) { model.importSelectedLinkVideo() }
+            } else {
+                Text("Pick a video above. Then you can choose which part of it to download.")
+                    .font(.system(size: 12)).foregroundStyle(Theme.secondary)
+                    .frame(height: 42)
+            }
             Spacer(minLength: 0)
             Button("Back") { model.backFromLinkCollection() }
                 .buttonStyle(PillButtonStyle(kind: .quiet, height: 42))
@@ -52,7 +59,7 @@ struct LinkCollectionDialog: View {
                 .buttonStyle(PillButtonStyle(kind: .primary, height: 42))
                 .fixedSize()
                 .keyboardShortcut(model.selectedLinkVideo != nil ? .defaultAction : nil)
-                .disabled(model.selectedLinkVideo == nil)
+                .disabled(model.selectedLinkVideo == nil || model.urlImportSectionProblem != nil)
         }
     }
 }

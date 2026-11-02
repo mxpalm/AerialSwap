@@ -39,10 +39,14 @@ struct ContentView: View {
             }
         }
         .task(id: model.notice) {
-            // Confirmations go away by themselves; errors stay until dismissed.
-            guard let notice = model.notice, notice.kind != .error else { return }
-            try? await Task.sleep(for: .seconds(6))
-            if model.notice == notice { model.notice = nil }
+            // Confirmations go away by themselves; errors stay until dismissed or the user clicks somewhere else.
+            guard let notice = model.notice else { return }
+            if notice.kind == .error {
+                await dismissOnClickElsewhere(notice)
+            } else {
+                try? await Task.sleep(for: .seconds(6))
+                if model.notice == notice { model.notice = nil }
+            }
         }
         .fileImporter(isPresented: $model.showImporter, allowedContentTypes: [.movie, .video, .audiovisualContent]) { result in
             if case .success(let url) = result { model.loadSource(url) }
@@ -69,6 +73,22 @@ struct ContentView: View {
         } message: {
             Text(model.conversionPrompt)
         }
+    }
+
+    /// Until the task is cancelled (the notice changed): a click outside the toast dismisses it. Clicks inside it don't,
+    /// so its text can still be selected and copied. Mouse-down comes before a button's action, so an error that click
+    /// causes stays.
+    private func dismissOnClickElsewhere(_ notice: Notice) async {
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { event in
+            if let content = event.window?.contentView {
+                // SwiftUI's global frame has its origin top left, the window's bottom left.
+                let point = CGPoint(x: event.locationInWindow.x, y: content.frame.height - event.locationInWindow.y)
+                if !model.noticeFrame.contains(point), model.notice == notice { model.notice = nil }
+            }
+            return event
+        }
+        defer { if let monitor { NSEvent.removeMonitor(monitor) } }
+        while !Task.isCancelled { try? await Task.sleep(for: .seconds(3600)) }
     }
 
     /// No animations in --snapshot renders: ImageRenderer would capture screens halfway through their transition.
@@ -100,7 +120,7 @@ struct ContentView: View {
             QuickBusyOverlay(phase: model.phase)
         }
         if let notice = model.notice, model.screen != .working {
-            NoticeToast(notice: notice) { model.notice = nil }
+            NoticeToast(notice: notice, onFrame: { model.noticeFrame = $0 }) { model.notice = nil }
         }
         if model.isDropTargeted {
             DropHighlight()

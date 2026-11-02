@@ -146,6 +146,8 @@ final class AppModel {
     var progressStarted = Date.now
     @ObservationIgnored private var workStarted: Date?
     var notice: Notice?
+    /// Where the notice toast is (window coordinates, top left origin), so clicks outside it can dismiss an error.
+    @ObservationIgnored var noticeFrame = CGRect.zero
     var done: DoneInfo?
     private var transcodedURL: URL?
     private var transcoder: Transcoder?

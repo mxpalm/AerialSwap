@@ -484,6 +484,7 @@ struct QuickBusyOverlay: View {
 
 struct NoticeToast: View {
     let notice: Notice
+    var onFrame: (CGRect) -> Void = { _ in }   // the panel's frame in the window, for clicks outside it
     let dismiss: () -> Void
 
     var body: some View {
@@ -505,6 +506,7 @@ struct NoticeToast: View {
             .padding(.vertical, 11)
             .frame(maxWidth: 640)
             .glassPanel(cornerRadius: 16, opacity: 0.8)
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onFrame($0) }
             .padding(.top, 44)          // under the toolbar and the Desktop / Screen Saver chips
             Spacer()
         }

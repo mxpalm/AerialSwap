@@ -599,7 +599,7 @@ final class AppModel {
                     switch contents {
                     case .video(let info): self.downloadURL(url, section: nil, info: info)
                     case .collection(let collection) where collection.videos.isEmpty:
-                        self.fail(URLImportError.failed("There are no videos at this link."))
+                        self.fail(URLImportError.noVideos)
                     case .collection(let collection): self.showLinkCollection(collection)
                     }
                 }

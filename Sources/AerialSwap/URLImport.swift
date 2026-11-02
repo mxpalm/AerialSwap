@@ -13,6 +13,7 @@ enum URLImportError: LocalizedError {
     case notAWebAddress
     case needsYTDLP
     case failed(String)
+    case noVideos
     case cancelled
 
     var errorDescription: String? {
@@ -21,6 +22,7 @@ enum URLImportError: LocalizedError {
         case .needsYTDLP: "This link is a web page, not a video file. To import videos from pages like YouTube or Vimeo, "
             + "install yt-dlp (brew install yt-dlp) and try again."
         case .failed(let detail): "The video couldn't be downloaded: \(detail)"
+        case .noVideos: "There are no videos at this link. A board with only images, for example, has none."
         case .cancelled: "Download cancelled."
         }
     }
@@ -70,7 +72,9 @@ struct LinkCollection: Equatable, Sendable {
         guard let info = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               info["_type"] as? String == "playlist" else { return nil }
         var seen = Set<URL>()
-        let videos: [LinkVideo] = (info["entries"] as? [[String: Any]] ?? []).compactMap { entry in
+        // Entries yt-dlp couldn't read (e.g. image pins on a board: "No video formats found") are null.
+        let entries = (info["entries"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
+        let videos: [LinkVideo] = entries.compactMap { entry in
             let address = [entry["webpage_url"], entry["url"]].lazy.compactMap { $0 as? String }
                 .compactMap(URLImporter.webAddress).first
             guard let url = address, seen.insert(url).inserted else { return nil }
@@ -165,7 +169,7 @@ final class URLImporter: @unchecked Sendable {
         let p = Self.process(ytdlp, [
             "-J", "--flat-playlist", "--no-playlist", "--no-warnings",
             "-I", "1:\(Self.collectionLimit)",
-            "--", url.absoluteString,   // never read as an option
+            "--", await Self.address(for: url),   // never read as an option
         ])
         p.standardOutput = output
         let errors = ResultBox()
@@ -182,14 +186,16 @@ final class URLImporter: @unchecked Sendable {
             try? FileManager.default.removeItem(at: info)
             throw error
         }
-        guard status == 0, let data = try? Data(contentsOf: info), !data.isEmpty else {
-            try? FileManager.default.removeItem(at: info)
-            throw URLImportError.failed(Self.explanation(errors.values.2, status: status))
-        }
-        if let collection = LinkCollection.parse(data, link: url) {
+        let data = (try? Data(contentsOf: info)) ?? Data()
+        // A list comes with exit code 1 when some of its entries failed (they're left out), so it counts anyway.
+        if !data.isEmpty, let collection = LinkCollection.parse(data, link: url) {
             try? FileManager.default.removeItem(at: info)
             Log.info("yt-dlp: \(collection.videos.count) of \(collection.total) videos at the link")
             return .collection(collection)
+        }
+        guard status == 0, !data.isEmpty else {
+            try? FileManager.default.removeItem(at: info)
+            throw URLImportError.failed(Self.explanation(errors.values.2, status: status))
         }
         return .video(info: info)
     }
@@ -216,6 +222,23 @@ final class URLImporter: @unchecked Sendable {
         return try await runYTDLP(ytdlp, url: url, section: section, info: info, directory: directory, progress: progress)
     }
 
+    /// The address handed to yt-dlp: short links (pin.it) followed to where they lead, and the path decoded.
+    /// Some of yt-dlp's extractors pass names from the path on as they are, so a board named "Gefühl" reached Pinterest
+    /// as "gef%C3%BChl" and wasn't found.
+    private static func address(for url: URL) async -> String {
+        var url = url
+        if url.host()?.lowercased() == "pin.it" {
+            var request = URLRequest(url: url, timeoutInterval: 10)
+            request.httpMethod = "HEAD"
+            if let (_, response) = try? await URLSession.shared.data(for: request), let final = response.url { url = final }
+        }
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false), let scheme = components.scheme,
+              let host = components.percentEncodedHost,
+              let path = components.percentEncodedPath.removingPercentEncoding else { return url.absoluteString }
+        return "\(scheme)://\(host)" + (components.port.map { ":\($0)" } ?? "") + path
+            + (components.percentEncodedQuery.map { "?\($0)" } ?? "") + (components.percentEncodedFragment.map { "#\($0)" } ?? "")
+    }
+
     /// A link to a video file: by its extension, or (for links without one) by the server's content type.
     private static func isVideoFile(_ url: URL) async -> Bool {
         if ["mp4", "mov", "m4v", "webm", "mkv"].contains(url.pathExtension.lowercased()) { return true }
@@ -232,7 +255,8 @@ final class URLImporter: @unchecked Sendable {
         // Only that part: ffmpeg copies the streams from the nearest keyframe (no re-encode, so it's fast).
         let sectionArguments = section.map { ["--download-sections", "*\($0.start ?? 0)-\($0.end.map { "\($0)" } ?? "inf")"] } ?? []
         // The page as inspect saw it, or the link itself.
-        let source = info.map { ["--load-info-json", $0.path] } ?? ["--", url.absoluteString]   // "--": never read as an option
+        let address = info == nil ? await Self.address(for: url) : ""
+        let source = info.map { ["--load-info-json", $0.path] } ?? ["--", address]   // "--": never read as an option
         let p = Self.process(ytdlp, sectionArguments + [
             // One video, also when the link is a playlist (--no-playlist alone still downloads a whole playlist).
             "--no-playlist", "-I", "1", "--no-warnings", "--newline", "--progress",

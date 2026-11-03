@@ -134,8 +134,18 @@ Only real footage (`video_type=film`) of at least 1920 px width is listed, with 
 
 The topic row shows the topics that fit the panel, then the options menu (`TopicRow`); the other topics are in that
 menu under **More Topics**, and a selected one takes the last chip's place. The menu's options apply to both sources
-and are kept between launches (`DiscoverOptions` default): **Popular** or **Newest** (Pixabay `order=popular|latest`; Workshop by votes, this month's trend or relevance,
-or by date with query type 1), and **4K Only** (Pixabay `min_width=3840`; Workshop the creator's tag `3840 x 2160`).
+and are kept between launches (`DiscoverOptions` default):
+- **Sort:** Popular or Newest (Pixabay `order=popular|latest`; Workshop by votes, this month's trend or relevance, or
+  by date with query type 1). The Workshop also has **Most Subscribed** (query type 9, with searches too); Pixabay
+  sorts that as Popular.
+- **Resolution:** Any (1080p and up), 1440p and Up, or 4K Only. Pixabay uses `min_width` 1920 / 2560 / 3840. On the
+  Workshop every video item has exactly one resolution tag (Wallpaper Engine sets it; checked on about 400 results,
+  November 2026). So 4K requires `3840 x 2160`, and 1440p and Up excludes the lower tags (`excludedtags`, proxy
+  `resolution=1440`), and "Other resolution", which can be anything.
+- **Category** (Pixabay only): Pixabay's `category` parameter (Nature, Places, Travel, Animals, Backgrounds,
+  Buildings, Science, Transportation), on top of the topic or search.
+- **Hide Videos in Library:** leaves those tiles out of the results already loaded; nothing is searched again.
+
 Tiles of videos already in the library (matched by their page, `sourcePage`) say **In Library**; Workshop items that
 Steam already downloaded say **In Steam** (adding those is instant and doesn't count as a download).
 

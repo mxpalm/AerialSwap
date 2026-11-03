@@ -491,10 +491,35 @@ final class AppModel {
         discoverOptions.save()
     }
 
-    func setDiscoverOnly4K(_ only4K: Bool) {
+    func setDiscoverResolution(_ resolution: DiscoverResolution) {
         var options = discoverOptions
-        options.only4K = only4K
+        options.resolution = resolution
         applyDiscoverOptions(options)
+    }
+
+    func setDiscoverCategory(_ category: PixabayCategory) {
+        var options = discoverOptions
+        options.category = category
+        applyDiscoverOptions(options)
+    }
+
+    /// Only hides tiles: nothing is loaded again.
+    func setHideInLibrary(_ hide: Bool) {
+        discoverOptions.hideInLibrary = hide
+        discoverOptions.save()
+    }
+
+    /// The tiles shown: without videos already in the library when Hide Videos in Library is on.
+    var shownDiscoverVideos: [DiscoverVideo] {
+        guard discoverOptions.hideInLibrary else { return discoverVideos }
+        let pages = libraryPages
+        return discoverVideos.filter { !pages.contains($0.pageURL) }
+    }
+
+    var shownWorkshopItems: [WorkshopItem] {
+        guard discoverOptions.hideInLibrary else { return workshopItems }
+        let pages = libraryPages
+        return workshopItems.filter { item in item.page.map { !pages.contains($0.absoluteString) } ?? true }
     }
 
     /// Both sources search with the same options: the visible one reloads now, the other when it's shown next.

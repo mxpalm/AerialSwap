@@ -28,6 +28,7 @@ AerialSwap  --GET /workshop-status-->  Worker  -->  {"downloads": true}   (WORKS
   `numperpage` (3-50) are forwarded.
 - Always with `return_tags` and `return_previews` (extra screenshots and YouTube preview ids).
 - `resolution=4k` adds the tag `3840 x 2160` (4K only).
+- `resolution=1440` excludes the resolution tags below 1440p (`excludedtags`), and `Other resolution`.
 - Each item gets `creator_name`, its creator's public Steam profile name, from one `ISteamUser/GetPlayerSummaries`
   call per page (skipped when that fails).
 - Cached for an hour in KV; the same per-IP limit as `/videos`.

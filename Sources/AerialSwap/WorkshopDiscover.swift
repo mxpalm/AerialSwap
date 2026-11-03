@@ -110,23 +110,27 @@ struct WorkshopClient: Sendable {
                 options: DiscoverOptions = DiscoverOptions()) async throws -> (total: Int, items: [WorkshopItem]) {
         guard isAvailable else { throw WorkshopSearchError.noKey }
         var items = [URLQueryItem(name: "page", value: "\(page)"), URLQueryItem(name: "numperpage", value: "\(Self.pageSize)")]
-        let newest = options.sort == .newest
+        let sort = options.sort
+        // Query types: 0 by votes, 1 by date, 3 by trend, 9 by subscriptions, 12 by text relevance.
         if let search = text.isEmpty ? topic.search : text {
             items += [URLQueryItem(name: "search_text", value: String(search.prefix(100))),
-                      URLQueryItem(name: "query_type", value: newest ? "1" : "12")]
+                      URLQueryItem(name: "query_type", value: sort == .newest ? "1" : sort == .mostSubscribed ? "9" : "12")]
+        } else if sort == .newest || sort == .mostSubscribed {
+            items.append(URLQueryItem(name: "query_type", value: sort == .newest ? "1" : "9"))
         } else if topic.tag == nil {
-            items += newest ? [URLQueryItem(name: "query_type", value: "1")]
-                : [URLQueryItem(name: "query_type", value: "3"), URLQueryItem(name: "days", value: "30")]
+            items += [URLQueryItem(name: "query_type", value: "3"), URLQueryItem(name: "days", value: "30")]
         } else {
-            items.append(URLQueryItem(name: "query_type", value: newest ? "1" : "0"))
+            items.append(URLQueryItem(name: "query_type", value: "0"))
         }
         let topicTag = text.isEmpty ? topic.tag : nil
         var components: URLComponents
         if let key {
             // The same request the proxy makes.
             components = URLComponents(string: "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/")!
-            let tags = ["Video", "Everyone"] + (topicTag.map { [$0] } ?? []) + (options.only4K ? [Self.tag4K] : [])
-            components.queryItems = items + tags.enumerated().map { URLQueryItem(name: "requiredtags[\($0.offset)]", value: $0.element) } + [
+            let tags = ["Video", "Everyone"] + (topicTag.map { [$0] } ?? []) + (options.resolution == .uhd ? [Self.tag4K] : [])
+            let excluded = options.resolution == .qhd ? Self.below1440Tags : []
+            components.queryItems = items + tags.enumerated().map { URLQueryItem(name: "requiredtags[\($0.offset)]", value: $0.element) }
+                + excluded.enumerated().map { URLQueryItem(name: "excludedtags[\($0.offset)]", value: $0.element) } + [
                 URLQueryItem(name: "appid", value: SteamDownload.appID), URLQueryItem(name: "match_all_tags", value: "1"),
                 URLQueryItem(name: "return_tags", value: "1"), URLQueryItem(name: "return_previews", value: "1"),
                 URLQueryItem(name: "key", value: key),
@@ -134,7 +138,7 @@ struct WorkshopClient: Sendable {
         } else if let proxy, let viaProxy = URLComponents(url: proxy.appending(path: "workshop"), resolvingAgainstBaseURL: false) {
             components = viaProxy
             components.queryItems = items + (topicTag.map { [URLQueryItem(name: "tag", value: $0)] } ?? [])
-                + (options.only4K ? [URLQueryItem(name: "resolution", value: "4k")] : [])
+                + (options.resolution.proxyValue.map { [URLQueryItem(name: "resolution", value: $0)] } ?? [])
         } else {
             throw WorkshopSearchError.noKey
         }
@@ -158,6 +162,11 @@ struct WorkshopClient: Sendable {
     }
 
     static let tag4K = "3840 x 2160"
+    /// 1440p and up: every item has one resolution tag (Wallpaper Engine sets it), so the ones below are left out, and
+    /// "Other resolution", which can be anything. Same list as the proxy's.
+    static let below1440Tags = ["1920 x 1080", "1366 x 768", "1280 x 720", "Standard Definition", "Ultrawide 2560 x 1080",
+                                "Ultrawide Standard Definition", "Dual Standard Definition", "Portrait 1080 x 1920",
+                                "Portrait 720 x 1280", "Portrait Standard Definition", "Other resolution"]
 
     /// Public profile names (ISteamUser/GetPlayerSummaries) by SteamID64; empty when Steam doesn't answer.
     private static func creatorNames(_ ids: Set<String>, key: String) async -> [String: String] {
@@ -210,5 +219,16 @@ struct WorkshopClient: Sendable {
         guard url.scheme == "https", let host = url.host()?.lowercased() else { return false }
         return ["steamusercontent.com", "steamstatic.com", "steampowered.com"].contains { host == $0 || host.hasSuffix("." + $0) }
             || host == "steamuserimages-a.akamaihd.net"
+    }
+}
+
+extension DiscoverResolution {
+    /// The proxy's `resolution` parameter.
+    var proxyValue: String? {
+        switch self {
+        case .any: nil
+        case .qhd: "1440"
+        case .uhd: "4k"
+        }
     }
 }

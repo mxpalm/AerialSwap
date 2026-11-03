@@ -101,7 +101,7 @@ struct WorkshopPanel: View {
     private var grid: some View {
         VStack(spacing: 12) {
             LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(model.workshopItems) { item in WorkshopTile(model: model, item: item) }
+                ForEach(model.shownWorkshopItems) { item in WorkshopTile(model: model, item: item) }
             }
             .padding(3)
             if model.isWorkshopLoading {

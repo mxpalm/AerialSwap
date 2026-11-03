@@ -19,12 +19,20 @@ struct HomeView: View {
         return model.desktopAsset.flatMap { model.backdrops[model.backdropKey(for: $0)] }
     }
 
+    /// Workshop previews are often small (GIFs of 160-256 px): blurred, they don't look pixelated full-window.
+    private var backgroundBlur: CGFloat {
+        guard model.section == .discover, model.selectedDiscoverVideo == nil, let item = model.selectedWorkshopItem,
+              let image = model.workshopItemThumbnails[item.id], image.size.width < 1000 else { return 0 }
+        return 24
+    }
+
     private var canPreview: Bool { model.section == .library && !model.assets.isEmpty }
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
-                Backdrop(image: backgroundImage, player: model.visibleBackgroundPlayer, scrim: isPreviewing ? .clear : .side)
+                Backdrop(image: backgroundImage, player: model.visibleBackgroundPlayer, blur: backgroundBlur,
+                         scrim: isPreviewing ? .clear : .side)
                 HeaderEdgeEffect().opacity(isPreviewing ? 0 : 1)
                 if canPreview {
                     // A click on the wallpaper (anywhere outside the panel) hides or brings back the Library;

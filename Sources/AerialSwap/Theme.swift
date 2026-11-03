@@ -420,14 +420,70 @@ struct FitOrScroll<Content: View>: View {
 }
 
 /// A thumbnail image that fills its frame, or a placeholder gradient.
+/// Loops an animated image (GIF), which SwiftUI's Image shows only as its first frame. Fills its frame like
+/// `aspectRatio(contentMode: .fill)`, clipped to `cornerRadius`, and lets clicks through.
+struct AnimatedImage: NSViewRepresentable {
+    let image: NSImage
+    var cornerRadius: CGFloat = 0
+
+    final class View: NSView {
+        let imageView = NSImageView()
+
+        override init(frame: NSRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+            layer?.masksToBounds = true
+            layer?.cornerCurve = .continuous
+            imageView.imageScaling = .scaleAxesIndependently
+            imageView.animates = true
+            addSubview(imageView)
+        }
+
+        required init?(coder: NSCoder) { nil }
+
+        override func layout() {
+            super.layout()
+            let size = imageView.image?.size ?? .zero
+            guard size.width > 0, size.height > 0 else { imageView.frame = bounds; return }
+            let scale = max(bounds.width / size.width, bounds.height / size.height)
+            let width = size.width * scale, height = size.height * scale
+            imageView.frame = NSRect(x: (bounds.width - width) / 2, y: (bounds.height - height) / 2, width: width, height: height)
+        }
+
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
+    func makeNSView(context: Context) -> View { View() }
+
+    func updateNSView(_ view: View, context: Context) {
+        if view.imageView.image !== image {
+            view.imageView.image = image
+            view.needsLayout = true
+        }
+        view.layer?.cornerRadius = cornerRadius
+    }
+}
+
+extension NSImage {
+    /// A GIF with more than one frame.
+    var isAnimated: Bool {
+        representations.contains { (($0 as? NSBitmapImageRep)?.value(forProperty: .frameCount) as? Int ?? 0) > 1 }
+    }
+}
+
 struct Thumb: View {
     let image: NSImage?
     var cornerRadius: CGFloat = 10
+    var animates = false   // plays a GIF (Workshop previews) instead of showing its first frame
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Color.clear
             .overlay {
-                if let image {
+                if let image, animates, !reduceMotion, image.isAnimated {
+                    AnimatedImage(image: image, cornerRadius: cornerRadius)
+                } else if let image {
                     Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
                 } else {
                     LinearGradient(colors: [.indigo.opacity(0.5), .teal.opacity(0.4)], startPoint: .top, endPoint: .bottom)

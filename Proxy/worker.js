@@ -10,14 +10,20 @@
 
 const PIXABAY = "https://pixabay.com/api/videos/";
 // Only the parameters AerialSwap sends are forwarded; anything else is dropped.
-const ALLOWED = ["q", "video_type", "min_width", "safesearch", "order", "per_page", "page", "editors_choice"];
+const ALLOWED = ["q", "video_type", "min_width", "safesearch", "order", "per_page", "page", "editors_choice", "category"];
 const CACHE_SECONDS = 24 * 3600;
 
 const STEAM = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/";
 // Public profile names of the items' creators, for the credit.
 const STEAM_PLAYERS = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/";
-// resolution=4k: only wallpapers their creators tagged as 4K.
+// resolution=4k: only wallpapers tagged as 4K. resolution=1440: 1440p and up; every item has one resolution tag
+// (Wallpaper Engine sets it), so the lower ones are excluded, and "Other resolution", which can be anything.
 const RESOLUTION_TAGS = { "4k": "3840 x 2160" };
+const RESOLUTION_EXCLUDED = {
+  "1440": ["1920 x 1080", "1366 x 768", "1280 x 720", "Standard Definition", "Ultrawide 2560 x 1080",
+           "Ultrawide Standard Definition", "Dual Standard Definition", "Portrait 1080 x 1920",
+           "Portrait 720 x 1280", "Portrait Standard Definition", "Other resolution"],
+};
 // Wallpaper Engine's Workshop, video wallpapers for everyone only: fixed here, whatever the app asks for.
 const WORKSHOP_APP = "431960";
 const WORKSHOP_TAGS = ["Video", "Everyone"];
@@ -73,7 +79,7 @@ export default {
   },
 };
 
-// GET /workshop?search_text=&query_type=&page=&numperpage=&days=&tag=&resolution=   (all optional)
+// GET /workshop?search_text=&query_type=&page=&numperpage=&days=&tag=&resolution=4k|1440   (all optional)
 async function workshop(url, request, env, ctx) {
   if (!env.STEAM_KEY) return error(500, "The proxy has no Steam key.");
   const query = new URLSearchParams();
@@ -88,9 +94,10 @@ async function workshop(url, request, env, ctx) {
   const tag = url.searchParams.get("tag");
   // Workshop tags are words like "Nature" or "Sci-Fi".
   if (tag && /^[A-Za-z0-9 &'-]{1,30}$/.test(tag)) tags.push(tag);
-  const resolution = RESOLUTION_TAGS[url.searchParams.get("resolution") ?? ""];
-  if (resolution) tags.push(resolution);
+  const resolution = url.searchParams.get("resolution") ?? "";
+  if (RESOLUTION_TAGS[resolution]) tags.push(RESOLUTION_TAGS[resolution]);
   tags.forEach((t, i) => query.set(`requiredtags[${i}]`, t));
+  (RESOLUTION_EXCLUDED[resolution] ?? []).forEach((t, i) => query.set(`excludedtags[${i}]`, t));
   query.sort();
   const cacheKey = `workshop-creators?${query}`;   // answers with previews and creator names; older entries had neither
 

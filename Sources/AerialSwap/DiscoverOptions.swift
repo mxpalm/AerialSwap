@@ -1,20 +1,70 @@
 import SwiftUI
 
 enum DiscoverSort: String, Codable, CaseIterable, Sendable {
-    case popular, newest
+    case popular, newest, mostSubscribed   // Most Subscribed: Workshop only (Pixabay sorts it as Popular)
 
     var title: String {
         switch self {
         case .popular: "Popular"
         case .newest: "Newest"
+        case .mostSubscribed: "Most Subscribed"
+        }
+    }
+
+    static func choices(for source: DiscoverSource) -> [DiscoverSort] {
+        source == .workshop ? allCases : [.popular, .newest]
+    }
+
+    /// What a source sorts by: Pixabay has no subscriptions.
+    func effective(for source: DiscoverSource) -> DiscoverSort {
+        self == .mostSubscribed && source == .pixabay ? .popular : self
+    }
+}
+
+/// The smallest resolution listed. Pixabay: by width; Workshop: by the resolution tag every item has.
+enum DiscoverResolution: String, Codable, CaseIterable, Sendable {
+    case any, qhd, uhd
+
+    var title: String {
+        switch self {
+        case .any: "Any Resolution"
+        case .qhd: "1440p and Up"
+        case .uhd: "4K Only"
+        }
+    }
+
+    var shortTitle: String? {
+        switch self {
+        case .any: nil
+        case .qhd: "1440p+"
+        case .uhd: "4K"
+        }
+    }
+
+    /// Pixabay's `min_width`: Discover lists 1080p and up anyway.
+    var minWidth: Int {
+        switch self {
+        case .any: 1920
+        case .qhd: 2560
+        case .uhd: 3840
         }
     }
 }
 
-/// Search options shared by Pixabay and the Workshop (the options menu in Discover's header), kept between launches.
+/// Pixabay's own categories (its `category` parameter), the ones that make wallpapers.
+enum PixabayCategory: String, Codable, CaseIterable, Sendable {
+    case any = "", nature, places, travel, animals, backgrounds, buildings, science, transportation
+
+    var title: String { self == .any ? "All Categories" : rawValue.capitalized }
+}
+
+/// Search options shared by Pixabay and the Workshop (the options menu at the end of the topic row), kept between
+/// launches.
 struct DiscoverOptions: Codable, Equatable, Sendable {
     var sort = DiscoverSort.popular
-    var only4K = false   // Pixabay: at least 3840 px wide; Workshop: tagged 3840 x 2160 by its creator
+    var resolution = DiscoverResolution.any
+    var category = PixabayCategory.any                 // Pixabay only
+    var hideInLibrary = false                          // tiles of videos already in the library are left out
     /// Workshop: once the video is in the library, delete the copy Steam downloaded for it (see SteamDownload.removeCopy).
     var removeSteamCopy = true
 
@@ -22,11 +72,17 @@ struct DiscoverOptions: Codable, Equatable, Sendable {
 
     init() {}
 
+    private enum LegacyKeys: String, CodingKey { case only4K }   // before the resolution choice: a 4K Only switch
+
     /// Options saved by older versions lack newer keys: those get their defaults instead of resetting everything.
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let legacy = try decoder.container(keyedBy: LegacyKeys.self)
         sort = try container.decodeIfPresent(DiscoverSort.self, forKey: .sort) ?? .popular
-        only4K = try container.decodeIfPresent(Bool.self, forKey: .only4K) ?? false
+        resolution = try container.decodeIfPresent(DiscoverResolution.self, forKey: .resolution)
+            ?? (try legacy.decodeIfPresent(Bool.self, forKey: .only4K) == true ? .uhd : .any)
+        category = try container.decodeIfPresent(PixabayCategory.self, forKey: .category) ?? .any
+        hideInLibrary = try container.decodeIfPresent(Bool.self, forKey: .hideInLibrary) ?? false
         removeSteamCopy = try container.decodeIfPresent(Bool.self, forKey: .removeSteamCopy) ?? true
     }
 
@@ -36,6 +92,12 @@ struct DiscoverOptions: Codable, Equatable, Sendable {
 
     func save() {
         if let data = try? JSONEncoder().encode(self) { UserDefaults.standard.set(data, forKey: Self.key) }
+    }
+
+    /// The menu's label for a source: "Nature · Popular · 4K".
+    func label(for source: DiscoverSource) -> String {
+        let category = source == .pixabay && category != .any ? category.title : nil
+        return [category, sort.effective(for: source).title, resolution.shortTitle].compactMap { $0 }.joined(separator: " · ")
     }
 }
 
@@ -86,7 +148,7 @@ struct TopicRow: View {
 
     /// The chips that fit next to the menu, in order, and the rest for the menu.
     private func split(width: CGFloat) -> ([TopicChoice], [TopicChoice]) {
-        let available = width - DiscoverOptionsMenu.width(label: DiscoverOptionsMenu.label(model.discoverOptions)) - Self.spacing
+        let available = width - DiscoverOptionsMenu.width(label: model.discoverOptions.label(for: model.discoverSource)) - Self.spacing
         var visible: [TopicChoice] = [], used: CGFloat = 0
         for topic in topics {
             let needed = Self.chipWidth(topic.title) + (visible.isEmpty ? 0 : Self.spacing)
@@ -110,16 +172,12 @@ struct TopicRow: View {
     }
 }
 
-/// "Popular · 4K ⌄": the topics that don't fit the row, sort order and resolution, for both sources.
+/// "Popular · 4K ⌄": the topics that don't fit the row, sort order and filters, for both sources.
 struct DiscoverOptionsMenu: View {
     @Bindable var model: AppModel
     var moreTopics: [TopicChoice] = []
     var selectedID: String?
     var select: (String) -> Void = { _ in }
-
-    static func label(_ options: DiscoverOptions) -> String {
-        options.sort.title + (options.only4K ? " · 4K" : "")
-    }
 
     /// The label's width: icon, text, chevron and padding (TopicRow leaves room for it).
     static func width(label: String) -> CGFloat {
@@ -139,14 +197,25 @@ struct DiscoverOptionsMenu: View {
                     }
                     Divider()
                 }
-                Picker("Sort", selection: Binding(get: { model.discoverOptions.sort }, set: { model.setDiscoverSort($0) })) {
-                    ForEach(DiscoverSort.allCases, id: \.self) { Text($0.title).tag($0) }
+                Picker("Sort", selection: Binding(get: { model.discoverOptions.sort.effective(for: model.discoverSource) },
+                                                  set: { model.setDiscoverSort($0) })) {
+                    ForEach(DiscoverSort.choices(for: model.discoverSource), id: \.self) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.inline)
                 Divider()
-                Toggle("4K Only", isOn: Binding(get: { model.discoverOptions.only4K }, set: { model.setDiscoverOnly4K($0) }))
+                Picker("Resolution", selection: Binding(get: { model.discoverOptions.resolution }, set: { model.setDiscoverResolution($0) })) {
+                    ForEach(DiscoverResolution.allCases, id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.inline)
+                Divider()
+                if model.discoverSource == .pixabay {
+                    Picker("Category", selection: Binding(get: { model.discoverOptions.category }, set: { model.setDiscoverCategory($0) })) {
+                        ForEach(PixabayCategory.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.menu)
+                }
+                Toggle("Hide Videos in Library", isOn: Binding(get: { model.discoverOptions.hideInLibrary }, set: { model.setHideInLibrary($0) }))
                 if model.discoverSource == .workshop {
-                    Divider()
                     Toggle("Remove Steam's Copy After Saving",
                            isOn: Binding(get: { model.discoverOptions.removeSteamCopy }, set: { model.setRemoveSteamCopy($0) }))
                 }
@@ -158,14 +227,14 @@ struct DiscoverOptionsMenu: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .disabled(model.isBusy)
-            .help(moreTopics.isEmpty ? "Sort and resolution, for Pixabay and the Workshop" : "More topics, sort and resolution")
+            .help(moreTopics.isEmpty ? "Sort and filters" : "More topics, sort and filters")
         }
     }
 
     private var labelView: some View {
         HStack(spacing: 4) {
             Image(systemName: "line.3.horizontal.decrease")
-            Text(Self.label(model.discoverOptions))
+            Text(model.discoverOptions.label(for: model.discoverSource))
             Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).opacity(0.7)
         }
         .fixedSize()

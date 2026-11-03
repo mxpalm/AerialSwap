@@ -194,7 +194,7 @@ private struct DiscoverPanel: View {
     private var grid: some View {
         VStack(spacing: 12) {
             LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(model.discoverVideos) { video in DiscoverTile(model: model, video: video) }
+                ForEach(model.shownDiscoverVideos) { video in DiscoverTile(model: model, video: video) }
             }
             .padding(3)
             if model.isDiscoverLoading {

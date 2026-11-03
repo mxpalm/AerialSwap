@@ -40,6 +40,9 @@ const sent = upstreamCalls.at(-1);
 assert.equal(sent.searchParams.get("key"), "SECRET");
 assert.equal(sent.searchParams.get("per_page"), "50");
 assert.equal(sent.searchParams.get("callback"), null);
+// Pixabay's category is forwarded.
+await get(env, "/videos?q=&category=nature");
+assert.equal(upstreamCalls.at(-1).searchParams.get("category"), "nature");
 assert.ok(!(await r.text()).includes("SECRET"));
 
 // The same search (parameters in another order) comes from the cache and doesn't count against the limit.
@@ -95,6 +98,12 @@ assert.equal(q.searchParams.get("requiredtags[3]"), "3840 x 2160");
 await get(env, "/workshop?resolution=8k&page=2");
 q = upstreamCalls.findLast((u) => u.pathname.includes("QueryFiles"));
 assert.equal(q.searchParams.get("requiredtags[2]"), null);
+// resolution=1440 excludes the resolution tags below 1440p instead.
+await get(env, "/workshop?resolution=1440&page=3");
+q = upstreamCalls.findLast((u) => u.pathname.includes("QueryFiles"));
+assert.equal(q.searchParams.get("requiredtags[2]"), null);
+assert.equal(q.searchParams.get("excludedtags[0]"), "1920 x 1080");
+assert.equal(q.searchParams.get("excludedtags[10]"), "Other resolution");
 assert.ok(!(await r.text()).includes("STEAMSECRET"));
 assert.equal((await get(env, "/workshop?numperpage=500&tag=Nature&query_type=99&search_text=ocean")).headers.get("X-Proxy-Cache"), "HIT");
 // A tag with odd characters is ignored; without a Steam key the route refuses.

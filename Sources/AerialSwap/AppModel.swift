@@ -175,7 +175,7 @@ final class AppModel {
     // Transient UI state
     var showIntro: Bool
     var section = HomeSection.library
-    var isPreviewingWallpaper = false   // the Library's panels are hidden for a clean look at the wallpaper
+    var isPreviewingWallpaper = false   // the Library's or Discover's panels are hidden for a clean look at the wallpaper
     var showsPreviewHandle = false
     var pendingConversion: URL?       // unreadable file waiting for the user's OK to convert with ffmpeg
     @ObservationIgnored private var pendingConversionName: String?   // its title, kept for the converted copy

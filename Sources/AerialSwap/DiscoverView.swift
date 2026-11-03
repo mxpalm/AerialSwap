@@ -4,6 +4,7 @@ import SwiftUI
 /// full-window, then download it and set it up like any added video.
 struct DiscoverLayout: View {
     @Bindable var model: AppModel
+    var isPreviewing = false   // hidden for a clean look at the pick, as in the Library
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 20) {
@@ -11,11 +12,15 @@ struct DiscoverLayout: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, 8)
                 .padding(.bottom, 12)
+                .opacity(isPreviewing ? 0 : 1)
+            // Stays in place while hidden, so the preview keeps playing (onDisappear would pause it).
             Group {
                 if model.discoverSource == .workshop { WorkshopPanel(model: model) } else { DiscoverPanel(model: model) }
             }
             .frame(width: 460)
+            .offset(x: isPreviewing ? 460 + 16 * 2 : 0)
         }
+        .allowsHitTesting(!isPreviewing)
         .padding(.horizontal, 16)
         .padding(.top, 4)
         .padding(.bottom, 16)
@@ -238,7 +243,7 @@ private struct DiscoverPanel: View {
             Button("Use This Video") { model.downloadSelectedDiscover() }
                 .buttonStyle(PillButtonStyle(kind: .primary, height: 44, fullWidth: true))
                 .disabled(model.selectedDiscoverVideo == nil || model.isBusy)
-                .keyboardShortcut(model.selectedDiscoverVideo != nil && model.done == nil ? .defaultAction : nil)
+                .keyboardShortcut(model.selectedDiscoverVideo != nil && model.done == nil && !model.isPreviewingWallpaper ? .defaultAction : nil)
             Text(footerCaption).font(.system(size: 12)).foregroundStyle(Theme.secondary)
         }
         .padding(.top, 12)

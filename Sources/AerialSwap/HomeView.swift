@@ -19,7 +19,7 @@ struct HomeView: View {
         return model.desktopAsset.flatMap { model.backdrops[model.backdropKey(for: $0)] }
     }
 
-    private var canPreview: Bool { model.section == .library && !model.assets.isEmpty }
+    private var canPreview: Bool { !model.assets.isEmpty }
 
     var body: some View {
         GeometryReader { geo in
@@ -28,7 +28,7 @@ struct HomeView: View {
                          frames: model.section == .discover ? model.selectedWorkshopPreview?.frames : nil)
                 HeaderEdgeEffect().opacity(isPreviewing ? 0 : 1)
                 if canPreview {
-                    // A click on the wallpaper (anywhere outside the panel) hides or brings back the Library;
+                    // A click on the wallpaper (anywhere outside the panel) hides or brings back the Library or Discover;
                     // while previewing the panels let clicks through, so it is the whole window.
                     Color.clear
                         .contentShape(Rectangle())
@@ -40,7 +40,7 @@ struct HomeView: View {
                     if model.assets.isEmpty {
                         NoAerialsState(model: model)
                     } else if model.section == .discover {
-                        DiscoverLayout(model: model)
+                        DiscoverLayout(model: model, isPreviewing: isPreviewing)
                     } else {
                         LibraryLayout(model: model, isPreviewing: isPreviewing)
                     }
@@ -78,11 +78,13 @@ struct HomeView: View {
         }
         .buttonStyle(EdgeHandleStyle(isExpanded: model.showsPreviewHandle))
         .keyboardShortcut(isPreviewing ? .cancelAction : nil)
-        .help(isPreviewing ? "Show the Library (Esc)" : "Hide the Library to preview the wallpaper")
-        .accessibilityLabel(isPreviewing ? "Show Library" : "Preview Wallpaper")
+        .help(isPreviewing ? "Show \(panelName) (Esc)" : "Hide \(panelName) to preview the wallpaper")
+        .accessibilityLabel(isPreviewing ? "Show \(panelName)" : "Preview Wallpaper")
         .padding(.trailing, isPreviewing ? Self.handleEdgeInset : LibraryLayout.edgeInset + LibraryLayout.panelWidth + 10 - EdgeHandleStyle.width / 2)
         .animation(.snappy(duration: 0.25), value: model.showsPreviewHandle)
     }
+
+    private var panelName: String { model.section == .discover ? "Discover" : "the Library" }
 
     private static let handleEdgeInset: CGFloat = 8
     private static let revealDistance: CGFloat = 48

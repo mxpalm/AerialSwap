@@ -151,7 +151,7 @@ struct WorkshopPanel: View {
                 Button("Download with Steam") { model.downloadSelectedWorkshopItem() }
                     .buttonStyle(PillButtonStyle(kind: .primary, height: 44, fullWidth: true))
                     .disabled(model.selectedWorkshopItem == nil || model.isBusy)
-                    .keyboardShortcut(model.selectedWorkshopItem != nil && model.done == nil ? .defaultAction : nil)
+                    .keyboardShortcut(model.selectedWorkshopItem != nil && model.done == nil && !model.isPreviewingWallpaper ? .defaultAction : nil)
             } else {
                 Link(destination: SteamDownload.getSteamPage) {
                     Label("Get Steam for Mac", systemImage: "arrow.up.right").labelStyle(TrailingIconLabelStyle())

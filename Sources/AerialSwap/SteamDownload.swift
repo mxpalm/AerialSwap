@@ -148,6 +148,34 @@ enum SteamDownload {
         return manifest[entry.upperBound..<end.lowerBound].contains("\"subscribedby\"")
     }
 
+    /// Whether the Steam account owns Wallpaper Engine, asked of a running Steam through `AerialSwap --steam-check`;
+    /// nil when Steam isn't running or doesn't answer within 15 s. While the check runs (about a second) Steam shows the
+    /// user as playing Wallpaper Engine, as during a download.
+    static func checkOwnership() async -> Bool? {
+        guard isInstalled, !NSRunningApplication.runningApplications(withBundleIdentifier: "com.valvesoftware.steam").isEmpty,
+              let executable = Bundle.main.executableURL else { return nil }
+        let p = Process()
+        p.executableURL = executable
+        p.arguments = ["--steam-check"]
+        var environment = ProcessInfo.processInfo.environment
+        environment["SteamAppId"] = appID
+        environment["SteamGameId"] = appID
+        p.environment = environment
+        p.standardInput = FileHandle.nullDevice
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        let status: Int32? = await withCheckedContinuation { continuation in
+            p.terminationHandler = { continuation.resume(returning: $0.terminationStatus) }
+            do { try p.run() } catch { p.terminationHandler = nil; continuation.resume(returning: nil); return }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 15) { if p.isRunning { p.terminate() } }
+        }
+        let owned: Bool? = switch status { case 0: true; case 3: false; default: nil }
+        Log.info("Steam: Wallpaper Engine owned: \(owned.map(String.init) ?? "unknown")")
+        return owned
+    }
+
+    static let notOwnedMessage = "This Steam account doesn't own Wallpaper Engine, so Steam can't download its wallpapers."
+
     static func isValidID(_ id: String) -> Bool { !id.isEmpty && id.count <= 20 && id.allSatisfy(\.isASCII) && id.allSatisfy(\.isNumber) }
 
     // MARK: - Child process
@@ -205,7 +233,7 @@ enum SteamDownload {
         defer { shutdown() }
         // Nothing is asked of the Workshop for an account that doesn't own Wallpaper Engine.
         guard let apps = appsAccessor(), isSubscribed(apps) else {
-            emit("ERROR This Steam account doesn't own Wallpaper Engine, so Steam can't download its wallpapers.")
+            emit("ERROR " + notOwnedMessage)
             return 1
         }
         guard let ugc = ugcAccessor() else { emit("ERROR Steam's Workshop isn't available."); return 1 }
@@ -246,6 +274,31 @@ enum SteamDownload {
         return 1
     }
 
+    /// `AerialSwap --steam-check`, started by `checkOwnership` with SteamAppId set: exits 0 when the logged-in account
+    /// owns Wallpaper Engine, 3 when it doesn't, 1 when that can't be told (Steam not running or not logged in).
+    /// Never starts Steam, and waits at most 5 s for it.
+    static func runCheck() -> Int32 {
+        guard let path = library()?.path, let lib = dlopen(path, RTLD_NOW) else { return 1 }
+        func symbol<T>(_ name: String, as type: T.Type) -> T? { dlsym(lib, name).map { unsafeBitCast($0, to: type) } }
+        guard let isSteamRunning = symbol("SteamAPI_IsSteamRunning", as: (@convention(c) () -> Bool).self),
+              let initFlat = symbol("SteamAPI_InitFlat", as: (@convention(c) (UnsafeMutablePointer<CChar>) -> Int32).self),
+              let shutdown = symbol("SteamAPI_Shutdown", as: (@convention(c) () -> Void).self),
+              let appsAccessor = (5...20).reversed().lazy
+                .compactMap({ symbol(String(format: "SteamAPI_SteamApps_v%03d", $0), as: (@convention(c) () -> OpaquePointer?).self) })
+                .first,
+              let isSubscribed = symbol("SteamAPI_ISteamApps_BIsSubscribed", as: (@convention(c) (OpaquePointer) -> Bool).self),
+              isSteamRunning() else { return 1 }
+        var error = [CChar](repeating: 0, count: 1024)
+        let started = Date.now
+        while initFlat(&error) != 0 {
+            if Date.now.timeIntervalSince(started) > 5 { return 1 }
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        defer { shutdown() }
+        guard let apps = appsAccessor() else { return 1 }
+        return isSubscribed(apps) ? 0 : 3
+    }
+
     private static func emit(_ line: String) {
         print(line)
         fflush(stdout)
@@ -258,6 +311,7 @@ enum SteamDownloadError: LocalizedError {
     case notAVideo
     case notForEveryone
     case paused
+    case notOwned
     case cancelled
 
     var errorDescription: String? {
@@ -267,6 +321,7 @@ enum SteamDownloadError: LocalizedError {
         case .notAVideo: "Steam downloaded it, but it isn't a video wallpaper AerialSwap can use."
         case .notForEveryone: "This wallpaper isn't rated for everyone, so AerialSwap doesn't use it."
         case .paused: "Downloading Workshop wallpapers with Steam is paused for now. Try again in a few days."
+        case .notOwned: SteamDownload.notOwnedMessage
         case .cancelled: "Download cancelled."
         }
     }
@@ -352,6 +407,7 @@ final class SteamDownloader: @unchecked Sendable {
         guard status == 0, let folder else {
             let message = error ?? "Steam's download helper stopped (exit code \(status))."
             Log.error("Steam: \(message)")
+            if message == SteamDownload.notOwnedMessage { throw SteamDownloadError.notOwned }
             throw SteamDownloadError.failed(message)
         }
         // Only a folder for this item in a Wallpaper Engine content folder is accepted.

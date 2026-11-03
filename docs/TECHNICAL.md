@@ -227,6 +227,16 @@ anything from Steam itself.
     copy is kept. Tested (macOS 27.2, November 2026): Steam doesn't bring a removed item back by itself, and a later
     Download with Steam downloads it again instead of reporting the missing folder as installed.
 
+**Ownership check** (`SteamDownload.checkOwnership`): when the Workshop opens, and Steam is already running, and the user
+agreed to Download with Steam, AerialSwap runs `AerialSwap --steam-check` (same environment as the download child).
+It never starts Steam and waits at most 5 s for `SteamAPI_InitFlat`. It exits 0 when `ISteamApps::BIsSubscribed`
+says the account owns Wallpaper Engine, 3 when it doesn't, and 1 when it can't tell. It takes about half a second,
+during which Steam shows the user as playing Wallpaper Engine; this is why it waits for the consent. A yes is kept
+for the launch. A no is checked again at most once a minute, when an item is selected (it may have been bought
+meanwhile). A download that Steam accepts counts as a yes, and one refused as not owned counts as a no. While the
+answer is no, the button for items Steam doesn't have yet is **Get Wallpaper Engine** (store page). Items that
+say In Steam can still be added.
+
 `DownloadItem` doesn't subscribe the account: the item doesn't show up in the user's Workshop subscriptions, and
 Steam may remove it when it cleans up. AerialSwap's library keeps its own converted copy.
 

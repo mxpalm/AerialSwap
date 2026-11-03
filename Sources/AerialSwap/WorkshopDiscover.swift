@@ -6,6 +6,7 @@ struct WorkshopItem: Identifiable, Hashable, Sendable {
     var id: String
     var title: String
     var previewURL: URL?
+    var screenshotURL: URL?   // the creator's first extra screenshot: full size, unlike GIF previews (160-256 px)
     var size: Int64
     var tags: [String]
     var subscriptions: Int
@@ -125,7 +126,12 @@ struct WorkshopClient: Sendable {
             else { return nil }
             let preview = (d["preview_url"] as? String).flatMap(URL.init(string:)).flatMap { isSteamImage($0) ? $0 : nil }
             let tags = (d["tags"] as? [[String: Any]] ?? []).compactMap { $0["tag"] as? String }
-            return WorkshopItem(id: id, title: String(title.prefix(120)), previewURL: preview,
+            // Extra previews: type 0 is a picture, 1 a YouTube video.
+            let screenshot = (d["previews"] as? [[String: Any]] ?? []).lazy
+                .filter { ($0["preview_type"] as? NSNumber)?.intValue == 0 }
+                .compactMap { ($0["url"] as? String).flatMap(URL.init(string:)) }
+                .first(where: isSteamImage)
+            return WorkshopItem(id: id, title: String(title.prefix(120)), previewURL: preview, screenshotURL: screenshot,
                                 size: Int64(d["file_size"] as? String ?? "") ?? (d["file_size"] as? NSNumber)?.int64Value ?? 0,
                                 tags: tags, subscriptions: (d["subscriptions"] as? NSNumber)?.intValue ?? 0)
         }

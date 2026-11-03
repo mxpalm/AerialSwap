@@ -647,13 +647,71 @@ final class AppModel {
 
     private func loadWorkshopItemThumbnail(_ item: WorkshopItem) {
         guard workshopItemThumbnails[item.id] == nil, let url = item.previewURL else { return }
-        Task { if let image = await Self.remoteImage(url) { workshopItemThumbnails[item.id] = image } }
+        Task {
+            guard let image = await Self.remoteImage(url) else { return }
+            workshopItemThumbnails[item.id] = image
+            if item.id == selectedWorkshopItemID { updateWorkshopPreview() }
+        }
     }
 
-    /// Selecting shows the item's preview picture full-window (Steam has no streamable video); again deselects it.
+    /// The picture behind the panel for a Workshop pick: the creator's screenshot when it's larger than the preview
+    /// (GIF previews are 160-256 px).
+    func workshopBackdrop(for item: WorkshopItem) -> NSImage? {
+        let screenshot = backdrops["workshop-\(item.id)"], preview = workshopItemThumbnails[item.id]
+        guard let screenshot, let preview else { return screenshot ?? preview }
+        return screenshot.pixelWidth >= preview.pixelWidth ? screenshot : preview
+    }
+
+    /// A Workshop pick whose best picture is under 1000 px: its frames, played full-window (Backdrop) and labelled
+    /// "Low-res preview"; `upscaled` once PreviewUpscaler is done.
+    struct WorkshopPreview {
+        var id: String
+        var source: ObjectIdentifier   // the picture the frames come from
+        var frames: PreviewFrames
+        var upscaled = false
+    }
+    var workshopPreview: WorkshopPreview?
+    @ObservationIgnored private var workshopUpscaleTask: Task<Void, Never>?
+
+    var selectedWorkshopPreview: WorkshopPreview? {
+        guard let preview = workshopPreview, preview.id == selectedWorkshopItem?.id else { return nil }
+        return preview
+    }
+
+    /// Small pictures play as frames right away and are replaced by their 4x ML upscale when it's ready.
+    private func updateWorkshopPreview() {
+        guard !isSnapshot, let item = selectedWorkshopItem, let image = workshopBackdrop(for: item),
+              image.pixelWidth < 1000 else {
+            workshopUpscaleTask?.cancel()
+            workshopPreview = nil
+            return
+        }
+        let source = ObjectIdentifier(image)
+        guard workshopPreview?.id != item.id || workshopPreview?.source != source else { return }
+        workshopUpscaleTask?.cancel()
+        guard let frames = PreviewFrames(image) else { workshopPreview = nil; return }
+        workshopPreview = WorkshopPreview(id: item.id, source: source, frames: frames)
+        workshopUpscaleTask = Task {
+            let upscaled = await Task.detached(priority: .userInitiated) { await PreviewUpscaler.upscale(frames) }.value
+            guard !Task.isCancelled, let upscaled, workshopPreview?.id == item.id else { return }
+            workshopPreview = WorkshopPreview(id: item.id, source: source, frames: upscaled, upscaled: true)
+        }
+    }
+
+    /// Selecting shows the item's screenshot full-window, else its preview picture (Steam has no streamable video);
+    /// again deselects it.
     func selectWorkshopItem(_ item: WorkshopItem) {
         guard !isBusy else { return }
         selectedWorkshopItemID = item.id == selectedWorkshopItemID ? nil : item.id
+        let key = "workshop-\(item.id)"
+        if selectedWorkshopItemID != nil, backdrops[key] == nil, let url = item.screenshotURL {
+            Task {
+                guard let image = await Self.remoteImage(url) else { return }
+                backdrops[key] = image
+                if item.id == selectedWorkshopItemID { updateWorkshopPreview() }
+            }
+        }
+        updateWorkshopPreview()
         showBackgroundVideo()
     }
 
@@ -687,7 +745,7 @@ final class AppModel {
         let downloader = SteamDownloader()
         steamDownloader = downloader
         displayName = item.title
-        backdrops["source"] = workshopItemThumbnails[item.id]
+        backdrops["source"] = workshopBackdrop(for: item)
         downloadSource = "Steam"
         downloadDetail = "Your Steam app downloads it\(item.size > 0 ? " (\(item.size.formatted(.byteCount(style: .file))))" : ""). "
             + "Meanwhile Steam shows you as playing Wallpaper Engine. Then you can trim it and set it as your wallpaper."

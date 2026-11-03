@@ -26,7 +26,17 @@ struct DiscoverLayout: View {
     @ViewBuilder private var previewCaption: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let item = model.selectedWorkshopItem {
-                Text("Previewing").font(.system(size: 13, weight: .semibold)).opacity(0.9)
+                HStack(spacing: 8) {
+                    Text("Previewing").font(.system(size: 13, weight: .semibold)).opacity(0.9)
+                    if let preview = model.selectedWorkshopPreview {
+                        // The creator's preview is all Steam has before downloading; the video itself is full size.
+                        Text(preview.upscaled ? "Low-res preview, upscaled" : "Low-res preview")
+                            .font(.system(size: 11, weight: .bold))
+                            .padding(.horizontal, 8).padding(.vertical, 2)
+                            .background(Capsule().fill(.white.opacity(0.2)))
+                            .help("Steam only has this small preview picture. The wallpaper itself is \(item.resolutionText ?? "full size").")
+                    }
+                }
                 Text(item.title).font(.system(size: 40, weight: .bold)).tracking(-0.8).lineLimit(2)
                 Text(workshopDetails(item)).font(.system(size: 14)).opacity(0.9)
                 if let page = item.page {

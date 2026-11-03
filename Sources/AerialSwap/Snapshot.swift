@@ -204,7 +204,7 @@ enum Snapshot {
             ("Pixel Harbour", "src_wide24.mov", ["Video", "Pixel art", "Other resolution", "Everyone"], 26_000_000),
         ]
         for (index, (title, file, tags, size)) in workshop.enumerated() {
-            let item = WorkshopItem(id: "\(2_900_000_000 + index)", title: title, previewURL: nil, size: size, tags: tags,
+            let item = WorkshopItem(id: "\(2_900_000_000 + index)", title: title, previewURL: nil, screenshotURL: nil, size: size, tags: tags,
                                     subscriptions: 1000)
             model.workshopItems.append(item)
             model.workshopItemThumbnails[item.id] = await frame(footage.appending(path: file), large: true)

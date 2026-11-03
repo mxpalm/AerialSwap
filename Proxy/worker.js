@@ -53,7 +53,7 @@ export default {
     const perPage = parseInt(query.get("per_page") ?? "30", 10) || 30;
     query.set("per_page", String(Math.min(Math.max(perPage, 3), 50)));
     query.sort();
-    const cacheKey = `videos?${query}`;
+    const cacheKey = await kvKey(`videos?${query}`);
 
     const cached = await env.CACHE?.get(cacheKey);
     if (cached) return json(cached, 200, "HIT");
@@ -99,7 +99,7 @@ async function workshop(url, request, env, ctx) {
   tags.forEach((t, i) => query.set(`requiredtags[${i}]`, t));
   (RESOLUTION_EXCLUDED[resolution] ?? []).forEach((t, i) => query.set(`excludedtags[${i}]`, t));
   query.sort();
-  const cacheKey = `workshop-creators?${query}`;   // answers with previews and creator names; older entries had neither
+  const cacheKey = await kvKey(`workshop-creators?${query}`);   // answers with previews and creator names; older entries had neither
 
   const cached = await env.CACHE?.get(cacheKey);
   if (cached) return json(cached, 200, "HIT");
@@ -123,6 +123,15 @@ async function workshop(url, request, env, ctx) {
   const body = await withCreatorNames(await upstream.text(), env);
   if (env.CACHE) ctx.waitUntil(env.CACHE.put(cacheKey, body, { expirationTtl: WORKSHOP_CACHE_SECONDS }).catch(() => {}));
   return json(body, 200, "MISS");
+}
+
+// Workers KV keys are at most 512 bytes: a longer query (e.g. resolution=1440 with its excluded tags) is cached under
+// its path and a SHA-256 of the query.
+async function kvKey(key) {
+  if (new TextEncoder().encode(key).length <= 512) return key;
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
+  const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return `${key.slice(0, key.indexOf("?") + 1)}sha256=${hex}`;
 }
 
 // Adds `creator_name` (the public Steam profile name) to each item, in one GetPlayerSummaries call for the page.

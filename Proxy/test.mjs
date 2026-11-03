@@ -19,12 +19,20 @@ globalThis.fetch = async (url) => {
   return new Response('{"totalHits":1,"hits":[]}');
 };
 
+function checkKey(k) {
+  if (new TextEncoder().encode(k).length > 512) throw new Error(`KV key too long: ${k.length}`);
+}
+
 function makeEnv({ key = "SECRET", limit = 100 } = {}) {
   const kv = new Map();
   let used = 0;
   return {
     PIXABAY_KEY: key,
-    CACHE: { get: async (k) => kv.get(k) ?? null, put: async (k, v) => { kv.set(k, v); } },
+    // Like Workers KV: keys longer than 512 bytes throw.
+    CACHE: {
+      get: async (k) => { checkKey(k); return kv.get(k) ?? null; },
+      put: async (k, v) => { checkKey(k); kv.set(k, v); },
+    },
     LIMITER: { limit: async () => ({ success: ++used <= limit }) },
   };
 }
@@ -104,6 +112,8 @@ q = upstreamCalls.findLast((u) => u.pathname.includes("QueryFiles"));
 assert.equal(q.searchParams.get("requiredtags[2]"), null);
 assert.equal(q.searchParams.get("excludedtags[0]"), "1920 x 1080");
 assert.equal(q.searchParams.get("excludedtags[10]"), "Other resolution");
+// Its cache key is too long for KV as is: hashed, and the second request is a hit.
+assert.equal((await get(env, "/workshop?resolution=1440&page=3")).headers.get("X-Proxy-Cache"), "HIT");
 assert.ok(!(await r.text()).includes("STEAMSECRET"));
 assert.equal((await get(env, "/workshop?numperpage=500&tag=Nature&query_type=99&search_text=ocean")).headers.get("X-Proxy-Cache"), "HIT");
 // A tag with odd characters is ignored; without a Steam key the route refuses.

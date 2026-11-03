@@ -99,6 +99,15 @@ bundle (`SSL_CERT_FILE=/etc/ssl/cert.pem`), as its static OpenSSL has none.
 6 s clip of a 10-minute 4K video is ~5 MB instead of ~700 MB. It needs ffmpeg too (yt-dlp uses it to cut the stream
 without re-encoding; video files are cut at the nearest keyframe before the start), and shows a spinner instead of a
 percentage, as yt-dlp reports the part only when it's done.
+**One Video | Playlist or Board** switches the dialog. One Video downloads with `--no-playlist -I 1`, so a playlist link
+never downloads more than one video. Playlist or Board first runs `yt-dlp -J --flat-playlist --no-playlist -I 1:200`
+and shows the videos in a grid (title, uploader, length, size badge when listed); the part to download is asked under
+the grid once a video is picked. A link to a single video is downloaded right away from that same look
+(`--load-info-json`), so the page isn't fetched twice. Entries that already carry their formats (Pinterest boards,
+whose `/pin/e1_…` links can't be opened again) are downloaded from their own info. A list still counts when yt-dlp
+exits with 1 because some entries failed (image pins); those are left out. yt-dlp reads the address from a file (`-a`):
+`Process` passes arguments decomposed (NFD), so a board named "Gefühl" wasn't found; `pin.it` links are followed and
+the path decoded first. Thumbnails load only over https.
 
 **Discover:** free videos from [Pixabay](https://pixabay.com/). Pick a topic (Featured, From Above, Mountains, …)
 or search, then pick a video to preview it full size (a smaller version, at least 1280 px wide, is streamed). **Use This Video** downloads

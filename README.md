@@ -33,7 +33,7 @@ Aerials stay untouched.
 
 You need a Mac with Apple Silicon (M1 or later) and macOS 27.
 
-1. **Download** `AerialSwap-1.0.zip` from the [latest release](https://github.com/mxpalm/AerialSwap/releases/latest)
+1. **Download** `AerialSwap-1.1.zip` from the [latest release](https://github.com/mxpalm/AerialSwap/releases/latest)
    and double-click it to unzip.
 2. **Move** `AerialSwap` into your **Applications** folder.
 3. **Open it.** The first time, macOS shows a warning, because AerialSwap is a free app from an independent
@@ -51,7 +51,8 @@ You need a Mac with Apple Silicon (M1 or later) and macOS 27.
 ### 1. Add a video
 
 Drag a video file anywhere onto the AerialSwap window, or click **Add Video**. You can also add a video from a
-link (**Add Video → From URL…**), or find a free one under **Discover** (see below).
+link (**Add Video → From URL…**), or find a free one under **Discover** (see below). For a playlist, a Pinterest
+board or a channel, switch the dialog to **Playlist or Board**: you see its videos and pick one.
 
 Any length works. Videos in 4K, filmed in landscape (wider than tall) with slow camera movement, look best.
 

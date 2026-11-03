@@ -95,6 +95,7 @@ struct LinkCollection: Equatable, Sendable {
     }
 
     /// The smallest listed thumbnail that is still sharp in a tile (at least 320 px wide), else the largest one.
+    /// Only https addresses: they come from the page, and a file:// one would read a local file.
     private static func thumbnail(of entry: [String: Any]) -> URL? {
         let listed = (entry["thumbnails"] as? [[String: Any]] ?? []).compactMap { t -> (url: URL, width: Int)? in
             guard let address = t["url"] as? String, let url = URL(string: address), url.scheme == "https" else { return nil }
@@ -102,7 +103,7 @@ struct LinkCollection: Equatable, Sendable {
         }
         let sharp = listed.filter { $0.width >= 320 }.min { $0.width < $1.width }
         return sharp?.url ?? listed.max { $0.width < $1.width }?.url
-            ?? (entry["thumbnail"] as? String).flatMap(URL.init(string:))
+            ?? (entry["thumbnail"] as? String).flatMap(URL.init(string:)).flatMap { $0.scheme == "https" ? $0 : nil }
     }
 }
 

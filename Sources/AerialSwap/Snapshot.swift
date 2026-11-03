@@ -166,9 +166,12 @@ enum Snapshot {
         ]
         for (index, (name, file)) in items.enumerated() {
             let url = footage.appending(path: file)
-            let item = LibraryItem(id: "lib\(index)", name: name, addedAt: date.addingTimeInterval(Double(-index) * 86_400),
+            var item = LibraryItem(id: "lib\(index)", name: name, addedAt: date.addingTimeInterval(Double(-index) * 86_400),
                                    duration: 28 + Double(index) * 4, bytes: 96_000_000 + Int64(index) * 31_000_000,
                                    fps: 60, motion: "Smooth", enhanced: index == 5, smoothLoop: true)
+            // "In Library" on the second Pixabay tile and the first Workshop tile.
+            if index == 1 { item.sourcePage = "https://pixabay.com/videos/id-1001/" }
+            if index == 2 { item.sourcePage = "https://steamcommunity.com/sharedfiles/filedetails/?id=2900000000" }
             model.libraryItems.append(item)
             model.libraryThumbnails[item.id] = await frame(url, large: false)
             model.backdrops["lib-\(item.id)"] = await frame(url, large: true)
@@ -205,11 +208,12 @@ enum Snapshot {
         ]
         for (index, (title, file, tags, size)) in workshop.enumerated() {
             let item = WorkshopItem(id: "\(2_900_000_000 + index)", title: title, previewURL: nil, screenshotURL: nil, size: size, tags: tags,
-                                    subscriptions: 1000)
+                                    subscriptions: 1000, creatorID: "7656119800000000\(index)", creatorName: "Creator\(index)")
             model.workshopItems.append(item)
             model.workshopItemThumbnails[item.id] = await frame(footage.appending(path: file), large: true)
         }
         model.workshopTotal = 180
+        model.steamDownloadedIDs = ["2900000002"]   // "In Steam" on the third tile
 
         for (index, video) in linkSample.videos.enumerated() {
             let files = ["scene_2160p30.mov", "src_portrait30.mov", "src_1080p24.mov", "hdr_hlg1080.mov", "src_wide24.mov",

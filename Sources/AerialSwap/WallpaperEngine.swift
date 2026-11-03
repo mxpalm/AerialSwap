@@ -92,6 +92,12 @@ enum WallpaperEngine {
     // MARK: - Steam folders
 
     /// Every `workshop/content/431960` folder that exists, with a label for where it is.
+    /// The IDs of all items Steam downloaded, in every source (folder names only, no project.json read): for the
+    /// "In Steam" badge in Discover.
+    static func downloadedIDs() -> Set<String> {
+        Set(contentFolders().flatMap { subdirectories(of: $0.1).prefix(maxItemsPerSource).map(\.lastPathComponent) })
+    }
+
     private static func contentFolders() -> [(String, URL)] {
         let home = FileManager.default.homeDirectoryForCurrentUser
         var found: [(String, URL)] = []

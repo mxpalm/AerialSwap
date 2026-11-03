@@ -38,9 +38,10 @@ struct WorkshopPanel: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 8) {
             DiscoverSourcePicker(model: model)
+            DiscoverOptionsMenu(model: model)
             Spacer()
             RenderableLink(destination: WorkshopClient.homepage, flat: model.isSnapshot) {
-                Label("Steam Workshop", systemImage: "arrow.up.right").labelStyle(TrailingIconLabelStyle())
+                Label("Workshop", systemImage: "arrow.up.right").labelStyle(TrailingIconLabelStyle())
             }
             .font(.system(size: 12))
             .foregroundStyle(Theme.secondary)
@@ -194,6 +195,9 @@ private struct WorkshopTile: View {
                         badge(item.size.formatted(.byteCount(style: .file)))
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     }
+                    if let status = model.status(of: item) {
+                        DiscoverStatusBadge(status: status).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    }
                 }
                 .aspectRatio(16 / 9, contentMode: .fit)
                 .overlay {
@@ -210,7 +214,7 @@ private struct WorkshopTile: View {
         .contextMenu {
             if let page = item.page { Link("View on the Steam Workshop", destination: page) }
         }
-        .help("\(item.title)\n\(item.genres.joined(separator: ", "))")
+        .help("\(item.title)\(item.creatorName.map { "\nVideo by \($0)" } ?? "")\n\(item.genres.joined(separator: ", "))")
     }
 
     private func badge(_ text: String) -> some View {

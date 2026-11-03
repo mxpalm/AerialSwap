@@ -10,6 +10,11 @@ struct WorkshopItem: Identifiable, Hashable, Sendable {
     var size: Int64
     var tags: [String]
     var subscriptions: Int
+    var creatorID: String? = nil     // the creator's SteamID64
+    var creatorName: String? = nil   // their public Steam profile name
+
+    /// "<name> on the Steam Workshop", for the library's credit.
+    var credit: String { creatorName.map { "\($0) on the Steam Workshop" } ?? "a Steam Workshop creator" }
 
     var page: URL? { URL(string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(id)") }
 
@@ -53,11 +58,12 @@ enum WorkshopSearchError: LocalizedError {
     }
 }
 
-/// A row of the Workshop topic picker: a Workshop tag, or the trending list.
+/// A row of the Workshop topic picker: a Workshop tag, a search (for subjects that aren't tags), or the trending list.
 struct WorkshopTopic: Hashable, Identifiable, Sendable {
     var id: String
     var title: String
     var tag: String?
+    var search: String? = nil
 
     static let all: [WorkshopTopic] = [
         WorkshopTopic(id: "trending", title: "Trending"),
@@ -90,22 +96,27 @@ struct WorkshopClient: Sendable {
 
     var isAvailable: Bool { key != nil || proxy != nil }
 
-    /// A search ranks by relevance; a topic shows its tag's best-rated videos, Trending this month's.
-    func search(_ text: String, topic: WorkshopTopic, page: Int) async throws -> (total: Int, items: [WorkshopItem]) {
+    /// Popular: a search ranks by relevance, a tag topic by votes, Trending by this month's trend. Newest: by date.
+    func search(_ text: String, topic: WorkshopTopic, page: Int,
+                options: DiscoverOptions = DiscoverOptions()) async throws -> (total: Int, items: [WorkshopItem]) {
         guard isAvailable else { throw WorkshopSearchError.noKey }
         var items = [URLQueryItem(name: "page", value: "\(page)"), URLQueryItem(name: "numperpage", value: "\(Self.pageSize)")]
-        if !text.isEmpty {
-            items += [URLQueryItem(name: "search_text", value: String(text.prefix(100))), URLQueryItem(name: "query_type", value: "12")]
+        let newest = options.sort == .newest
+        if let search = text.isEmpty ? topic.search : text {
+            items += [URLQueryItem(name: "search_text", value: String(search.prefix(100))),
+                      URLQueryItem(name: "query_type", value: newest ? "1" : "12")]
         } else if topic.tag == nil {
-            items += [URLQueryItem(name: "query_type", value: "3"), URLQueryItem(name: "days", value: "30")]
+            items += newest ? [URLQueryItem(name: "query_type", value: "1")]
+                : [URLQueryItem(name: "query_type", value: "3"), URLQueryItem(name: "days", value: "30")]
         } else {
-            items.append(URLQueryItem(name: "query_type", value: "0"))
+            items.append(URLQueryItem(name: "query_type", value: newest ? "1" : "0"))
         }
+        let topicTag = text.isEmpty ? topic.tag : nil
         var components: URLComponents
         if let key {
             // The same request the proxy makes.
             components = URLComponents(string: "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/")!
-            let tags = ["Video", "Everyone"] + (topic.tag.map { [$0] } ?? [])
+            let tags = ["Video", "Everyone"] + (topicTag.map { [$0] } ?? []) + (options.only4K ? [Self.tag4K] : [])
             components.queryItems = items + tags.enumerated().map { URLQueryItem(name: "requiredtags[\($0.offset)]", value: $0.element) } + [
                 URLQueryItem(name: "appid", value: SteamDownload.appID), URLQueryItem(name: "match_all_tags", value: "1"),
                 URLQueryItem(name: "return_tags", value: "1"), URLQueryItem(name: "return_previews", value: "1"),
@@ -113,7 +124,8 @@ struct WorkshopClient: Sendable {
             ]
         } else if let proxy, let viaProxy = URLComponents(url: proxy.appending(path: "workshop"), resolvingAgainstBaseURL: false) {
             components = viaProxy
-            components.queryItems = items + (topic.tag.map { [URLQueryItem(name: "tag", value: $0)] } ?? [])
+            components.queryItems = items + (topicTag.map { [URLQueryItem(name: "tag", value: $0)] } ?? [])
+                + (options.only4K ? [URLQueryItem(name: "resolution", value: "4k")] : [])
         } else {
             throw WorkshopSearchError.noKey
         }
@@ -125,7 +137,30 @@ struct WorkshopClient: Sendable {
         case let status where key != nil && (status == 401 || status == 403): throw WorkshopSearchError.badKey
         case let status: throw WorkshopSearchError.http(status)
         }
-        return Self.parse(data)
+        var result = Self.parse(data)
+        // The proxy adds the creators' names; with a key of one's own they're asked for here.
+        if let key, result.items.contains(where: { $0.creatorName == nil && $0.creatorID != nil }) {
+            let names = await Self.creatorNames(Set(result.items.compactMap(\.creatorID)), key: key)
+            for index in result.items.indices where result.items[index].creatorName == nil {
+                result.items[index].creatorName = result.items[index].creatorID.flatMap { names[$0] }
+            }
+        }
+        return result
+    }
+
+    static let tag4K = "3840 x 2160"
+
+    /// Public profile names (ISteamUser/GetPlayerSummaries) by SteamID64; empty when Steam doesn't answer.
+    private static func creatorNames(_ ids: Set<String>, key: String) async -> [String: String] {
+        var components = URLComponents(string: "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/")!
+        components.queryItems = [URLQueryItem(name: "key", value: key), URLQueryItem(name: "steamids", value: ids.prefix(100).joined(separator: ","))]
+        guard let (data, _) = try? await URLSession.shared.data(from: components.url!),
+              let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let players = (root["response"] as? [String: Any])?["players"] as? [[String: Any]] else { return [:] }
+        return Dictionary(players.compactMap { player in
+            guard let id = player["steamid"] as? String, let name = player["personaname"] as? String else { return nil }
+            return (id, name)
+        }, uniquingKeysWith: { first, _ in first })
     }
 
     /// QueryFiles' answer: `response.total` and `response.publishedfiledetails`. Items that aren't usable (no title,
@@ -140,6 +175,8 @@ struct WorkshopClient: Sendable {
             else { return nil }
             let preview = (d["preview_url"] as? String).flatMap(URL.init(string:)).flatMap { isSteamImage($0) ? $0 : nil }
             let tags = (d["tags"] as? [[String: Any]] ?? []).compactMap { $0["tag"] as? String }
+            let creator = (d["creator"] as? String).flatMap { SteamDownload.isValidID($0) ? $0 : nil }
+            let creatorName = (d["creator_name"] as? String).map(Self.cleanName).flatMap { $0.isEmpty ? nil : $0 }
             // Extra previews: type 0 is a picture, 1 a YouTube video.
             let screenshot = (d["previews"] as? [[String: Any]] ?? []).lazy
                 .filter { ($0["preview_type"] as? NSNumber)?.intValue == 0 }
@@ -147,9 +184,16 @@ struct WorkshopClient: Sendable {
                 .first(where: isSteamImage)
             return WorkshopItem(id: id, title: String(title.prefix(120)), previewURL: preview, screenshotURL: screenshot,
                                 size: Int64(d["file_size"] as? String ?? "") ?? (d["file_size"] as? NSNumber)?.int64Value ?? 0,
-                                tags: tags, subscriptions: (d["subscriptions"] as? NSNumber)?.intValue ?? 0)
+                                tags: tags, subscriptions: (d["subscriptions"] as? NSNumber)?.intValue ?? 0,
+                                creatorID: creator, creatorName: creatorName)
         }
         return ((response["total"] as? NSNumber)?.intValue ?? items.count, items)
+    }
+
+    /// A profile name as shown: without control characters, at most 64 characters.
+    static func cleanName(_ name: String) -> String {
+        String(name.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }).trimmingCharacters(in: .whitespaces)
+            .prefix(64).description
     }
 
     /// Workshop previews come from Steam's image servers; anything else isn't loaded.

@@ -124,6 +124,9 @@ final class AppModel {
     var discoverSource = DiscoverSource.pixabay
     // Discover: Wallpaper Engine's Workshop (see WorkshopClient, SteamDownloader)
     let workshop = WorkshopClient(proxy: PixabayClient().proxy)
+    var discoverOptions = DiscoverOptions.load()
+    /// Workshop items Steam already downloaded (any library), for the "In Steam" badge.
+    var steamDownloadedIDs: Set<String> = []
     var workshopTopic = WorkshopTopic.all[0]
     var workshopSearch = ""               // what's typed; searched on Return
     var workshopQuery = ""                // the search the results are for ("" = the topic)
@@ -465,6 +468,54 @@ final class AppModel {
         showBackgroundVideo()
     }
 
+    func setDiscoverSort(_ sort: DiscoverSort) {
+        var options = discoverOptions
+        options.sort = sort
+        applyDiscoverOptions(options)
+    }
+
+    func setDiscoverOnly4K(_ only4K: Bool) {
+        var options = discoverOptions
+        options.only4K = only4K
+        applyDiscoverOptions(options)
+    }
+
+    /// Both sources search with the same options: the visible one reloads now, the other when it's shown next.
+    private func applyDiscoverOptions(_ options: DiscoverOptions) {
+        guard !isBusy, options != discoverOptions else { return }
+        discoverOptions = options
+        options.save()
+        switch discoverSource {
+        case .pixabay:
+            workshopItems = []
+            loadDiscover()
+        case .workshop:
+            discoverVideos = []
+            loadWorkshop()
+        }
+    }
+
+    /// Whether a Discover pick is already in the library (by its page), or downloaded by Steam.
+    func status(of video: DiscoverVideo) -> DiscoverItemStatus? {
+        libraryPages.contains(video.pageURL) ? .inLibrary : nil
+    }
+
+    func status(of item: WorkshopItem) -> DiscoverItemStatus? {
+        if let page = item.page?.absoluteString, libraryPages.contains(page) { return .inLibrary }
+        return steamDownloadedIDs.contains(item.id) ? .inSteam : nil
+    }
+
+    private var libraryPages: Set<String> { Set(libraryItems.compactMap(\.sourcePage)) }
+
+    /// Reads which Workshop items Steam has, off the main thread (libraries can be on slow drives).
+    func refreshSteamDownloads() {
+        guard !isSnapshot else { return }
+        Task {
+            let ids = await Task.detached { WallpaperEngine.downloadedIDs() }.value
+            if ids != steamDownloadedIDs { steamDownloadedIDs = ids }
+        }
+    }
+
     private func loadDiscoverSourceIfEmpty() {
         switch discoverSource {
         case .pixabay: if discoverVideos.isEmpty, !isDiscoverLoading { loadDiscover() }
@@ -494,6 +545,7 @@ final class AppModel {
         guard !isSnapshot else { return }
         let query = more ? discoverQuery : discoverSearch.trimmingCharacters(in: .whitespaces)
         let editorsChoice = query.isEmpty && discoverTopic.editorsChoice
+        let options = discoverOptions
         let page = more ? discoverPage + 1 : 1
         discoverRequest += 1
         let request = discoverRequest
@@ -509,7 +561,7 @@ final class AppModel {
         Task {
             do {
                 let result = try await pixabay.search(query.isEmpty ? discoverTopic.query : query,
-                                                      editorsChoice: editorsChoice, page: page)
+                                                      editorsChoice: editorsChoice, page: page, options: options)
                 guard request == discoverRequest else { return }
                 let known = Set(discoverVideos.map(\.id))
                 let videos = result.hits.filter { !known.contains($0.id) }
@@ -650,9 +702,11 @@ final class AppModel {
         isWorkshopLoading = true
         workshopError = nil
         let topic = workshopTopic
+        let options = discoverOptions
+        if !more { refreshSteamDownloads() }
         Task {
             do {
-                let result = try await workshop.search(query, topic: topic, page: page)
+                let result = try await workshop.search(query, topic: topic, page: page, options: options)
                 guard request == workshopRequest else { return }
                 let known = Set(workshopItems.map(\.id))
                 let items = result.items.filter { !known.contains($0.id) }
@@ -773,7 +827,7 @@ final class AppModel {
             if let video = existing {
                 guard video.rating == nil else { fail(SteamDownloadError.notForEveryone); return }
                 Log.info("Steam: Workshop item \(item.id) is already downloaded")
-                useWorkshopVideo(video)
+                useWorkshopVideo(video, credit: item.credit)
             } else {
                 downloadWithSteam(item)
             }
@@ -812,7 +866,8 @@ final class AppModel {
                 guard video.rating == nil else { throw SteamDownloadError.notForEveryone }
                 await MainActor.run {
                     self.stopProgress()
-                    self.useWorkshopVideo(video)
+                    self.refreshSteamDownloads()
+                    self.useWorkshopVideo(video, credit: item.credit)
                 }
             } catch {
                 await MainActor.run {
@@ -1056,11 +1111,12 @@ final class AppModel {
     }
 
     /// Opens a Workshop video like a video the user added. The file stays where Steam put it and is only read.
-    func useWorkshopVideo(_ video: WorkshopVideo) {
+    /// `credit` is the creator from Discover ("<name> on the Steam Workshop"); a downloaded item alone doesn't name them.
+    func useWorkshopVideo(_ video: WorkshopVideo, credit: String? = nil) {
         guard !isBusy else { return }
         showWorkshopImport = false
         if let old = convertedTempURL { try? FileManager.default.removeItem(at: old); convertedTempURL = nil }
-        sourceCredit = ("a Steam Workshop creator", video.page?.absoluteString)
+        sourceCredit = (credit ?? "a Steam Workshop creator", video.page?.absoluteString)
         loadSource(video.video, displayName: video.title)
     }
 

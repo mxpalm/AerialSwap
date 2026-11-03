@@ -5,10 +5,18 @@ import worker from "./worker.js";
 
 const upstreamCalls = [];
 let upstreamStatus = 200;
+const workshopBody = JSON.stringify({ response: { total: 2, publishedfiledetails: [
+  { publishedfileid: "1", title: "A", creator: "76561198000000001" },
+  { publishedfileid: "2", title: "B", creator: "76561198000000002" },
+] } });
+const playersBody = JSON.stringify({ response: { players: [{ steamid: "76561198000000001", personaname: " Abi Toads " }] } });
 globalThis.fetch = async (url) => {
-  upstreamCalls.push(new URL(url));
-  return new Response(upstreamStatus === 200 ? '{"totalHits":1,"hits":[]}' : "[ERROR 400] Invalid or missing API key",
-                      { status: upstreamStatus });
+  const target = new URL(url);
+  upstreamCalls.push(target);
+  if (upstreamStatus !== 200) return new Response("[ERROR 400] Invalid or missing API key", { status: upstreamStatus });
+  if (target.pathname.includes("QueryFiles")) return new Response(workshopBody);
+  if (target.pathname.includes("GetPlayerSummaries")) return new Response(playersBody);
+  return new Response('{"totalHits":1,"hits":[]}');
 };
 
 function makeEnv({ key = "SECRET", limit = 100 } = {}) {
@@ -64,7 +72,7 @@ env = makeEnv();
 env.STEAM_KEY = "STEAMSECRET";
 r = await get(env, "/workshop?search_text=ocean&numperpage=500&appid=1&key=STOLEN&tag=Nature&query_type=99&requiredtags[0]=Mature");
 assert.equal(r.status, 200);
-const steam = upstreamCalls.at(-1);
+const steam = upstreamCalls.findLast((u) => u.pathname.includes("QueryFiles"));
 assert.equal(steam.origin + steam.pathname, "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/");
 assert.equal(steam.searchParams.get("key"), "STEAMSECRET");
 assert.equal(steam.searchParams.get("appid"), "431960");
@@ -74,6 +82,19 @@ assert.equal(steam.searchParams.get("requiredtags[0]"), "Video");
 assert.equal(steam.searchParams.get("requiredtags[1]"), "Everyone");
 assert.equal(steam.searchParams.get("requiredtags[2]"), "Nature");
 assert.equal(steam.searchParams.get("return_previews"), "1");
+// Creator names come from one GetPlayerSummaries call; items without a public name stay without one.
+const players = upstreamCalls.at(-1);
+assert.equal(players.searchParams.get("steamids"), "76561198000000001,76561198000000002");
+const enriched = JSON.parse(await (await get(env, "/workshop?numperpage=500&tag=Nature&query_type=99&search_text=ocean")).text());
+assert.equal(enriched.response.publishedfiledetails[0].creator_name, "Abi Toads");
+assert.equal(enriched.response.publishedfiledetails[1].creator_name, undefined);
+// resolution=4k adds the 4K tag after the topic's; other values are ignored.
+await get(env, "/workshop?tag=Nature&resolution=4k");
+let q = upstreamCalls.findLast((u) => u.pathname.includes("QueryFiles"));
+assert.equal(q.searchParams.get("requiredtags[3]"), "3840 x 2160");
+await get(env, "/workshop?resolution=8k&page=2");
+q = upstreamCalls.findLast((u) => u.pathname.includes("QueryFiles"));
+assert.equal(q.searchParams.get("requiredtags[2]"), null);
 assert.ok(!(await r.text()).includes("STEAMSECRET"));
 assert.equal((await get(env, "/workshop?numperpage=500&tag=Nature&query_type=99&search_text=ocean")).headers.get("X-Proxy-Cache"), "HIT");
 // A tag with odd characters is ignored; without a Steam key the route refuses.

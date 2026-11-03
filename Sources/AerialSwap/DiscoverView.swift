@@ -46,7 +46,7 @@ struct DiscoverLayout: View {
                 Text(workshopDetails(item)).font(.system(size: 14)).opacity(0.9)
                 if let page = item.page {
                     RenderableLink(destination: page, flat: model.isSnapshot) {
-                        Label("On the Steam Workshop", systemImage: "arrow.up.right")
+                        Label(item.creatorName.map { "Video by \($0)" } ?? "On the Steam Workshop", systemImage: "arrow.up.right")
                             .labelStyle(TrailingIconLabelStyle())
                     }
                     .font(.system(size: 14, weight: .semibold))
@@ -129,6 +129,7 @@ private struct DiscoverPanel: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 8) {
             DiscoverSourcePicker(model: model)
+            DiscoverOptionsMenu(model: model)
             Spacer()
             // Pixabay asks for a visible link wherever its results are shown.
             RenderableLink(destination: PixabayClient.homepage, flat: model.isSnapshot) {
@@ -271,6 +272,9 @@ private struct DiscoverTile: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     badge(minutesText(video.duration))
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    if let status = model.status(of: video) {
+                        DiscoverStatusBadge(status: status).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                    }
                 }
                 .aspectRatio(16 / 9, contentMode: .fit)
                 .overlay {

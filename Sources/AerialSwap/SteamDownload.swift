@@ -20,9 +20,14 @@ enum SteamDownload {
         FileManager.default.homeDirectoryForCurrentUser.appending(path: "Library/Application Support/Steam")
     }
 
-    /// Steam for Mac is installed and has set itself up (its runtime lives in Steam.AppBundle).
+    /// Steam for Mac is installed and has set itself up (its runtime lives in Steam.AppBundle). Both are needed: the
+    /// runtime stays behind when Steam.app is deleted, and without the app Steam can't be started for a download.
     static var isInstalled: Bool {
-        FileManager.default.fileExists(atPath: steamRoot.appending(path: "Steam.AppBundle").path)
+        // Test builds only: `defaults write io.github.mxpalm.AerialSwap SimulateNoSteam -bool YES` shows the app as without Steam.
+        if Bundle.main.object(forInfoDictionaryKey: "AerialSwapTestBuild") as? Bool == true,
+           UserDefaults.standard.bool(forKey: "SimulateNoSteam") { return false }
+        return NSWorkspace.shared.urlForApplication(withBundleIdentifier: steamBundleID) != nil
+            && FileManager.default.fileExists(atPath: steamRoot.appending(path: "Steam.AppBundle").path)
     }
 
     static var isRunning: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: steamBundleID).isEmpty }
@@ -112,8 +117,8 @@ enum SteamDownload {
     // MARK: - Child process
 
     /// `AerialSwap --steam-download <id>`, started by SteamDownloader with SteamAppId set. Prints one line per event:
-    /// "STARTED" once Steam accepted the download, "PROGRESS <done> <total>", then "FOLDER <path>" when the item is
-    /// installed, or "ERROR <message>".
+    /// "WAITING" while Steam is still starting or logging in, "STARTED" once Steam accepted the download,
+    /// "PROGRESS <done> <total>", then "FOLDER <path>" when the item is installed, or "ERROR <message>".
     static func runChild(_ args: [String]) -> Int32 {
         guard args.count == 2, isValidID(args[1]), let id = UInt64(args[1]) else { emit("ERROR usage: --steam-download <id>"); return 2 }
         guard let path = library()?.path else {
@@ -150,8 +155,10 @@ enum SteamDownload {
         // Steam may still be starting (SteamDownloader launches it): wait up to 90 s for it.
         var error = [CChar](repeating: 0, count: 1024)
         var started = Date.now
+        var waiting = false
         while true {
             if isSteamRunning(), initFlat(&error) == 0 { break }
+            if !waiting { emit("WAITING"); waiting = true }
             if Date.now.timeIntervalSince(started) > 90 {
                 let detail = String(decoding: error.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
                 emit("ERROR Steam isn't running or not logged in\(detail.isEmpty ? "" : " (\(detail))"). Open Steam, log in and try again.")
@@ -244,7 +251,8 @@ final class SteamDownloader: @unchecked Sendable {
 
     /// The downloaded wallpaper's folder (inside Steam's workshop/content/431960). `started` is called once Steam has
     /// accepted the download (the account owns Wallpaper Engine), so only real downloads count toward the limits.
-    func run(id: String, started: @escaping @Sendable () -> Void, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+    func run(id: String, waiting: @escaping @Sendable () -> Void, started: @escaping @Sendable () -> Void,
+             progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
         guard SteamDownload.isValidID(id) else { throw SteamDownloadError.failed("That isn't a Workshop item.") }
         guard SteamDownload.isInstalled else { throw SteamDownloadError.notInstalled }
         await SteamDownload.launchIfNeeded()
@@ -271,7 +279,9 @@ final class SteamDownloader: @unchecked Sendable {
             while let newline = pending.firstIndex(of: "\n") {
                 let line = String(pending[..<newline])
                 pending.removeSubrange(...newline)
-                if line == "STARTED" {
+                if line == "WAITING" {
+                    waiting()
+                } else if line == "STARTED" {
                     started()
                 } else if line.hasPrefix("PROGRESS ") {
                     let numbers = line.split(separator: " ").dropFirst().compactMap { Double($0) }

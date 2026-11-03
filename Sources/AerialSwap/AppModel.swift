@@ -134,6 +134,7 @@ final class AppModel {
     var workshopError: String?
     var selectedWorkshopItemID: String?
     var confirmSteamDownload = false      // the one-time "Download with Steam?" question
+    var showSteamNeeded = false           // Workshop picked without Steam for Mac
     @ObservationIgnored private var workshopPage = 0
     @ObservationIgnored private var workshopRequest = 0
     private var steamDownloader: SteamDownloader?
@@ -457,6 +458,8 @@ final class AppModel {
 
     func selectDiscoverSource(_ source: DiscoverSource) {
         guard !isBusy, source != discoverSource else { return }
+        // The Workshop's wallpapers can only be downloaded with Steam for Mac: without it, say what to do instead.
+        if source == .workshop, !SteamDownload.isInstalled, !isSnapshot { showSteamNeeded = true; return }
         discoverSource = source
         loadDiscoverSourceIfEmpty()
         showBackgroundVideo()
@@ -496,6 +499,7 @@ final class AppModel {
         let request = discoverRequest
         if !more {
             discoverQuery = query
+            cancelThumbnails("discover-")
             discoverVideos = []
             discoverTotal = 0
             selectDiscoverVideo(nil)
@@ -524,8 +528,27 @@ final class AppModel {
 
     private func loadDiscoverThumbnail(_ video: DiscoverVideo) {
         guard discoverThumbnails[video.id] == nil, let url = video.thumbnailURL else { return }
-        Task {
-            if let image = await Self.remoteImage(url) { discoverThumbnails[video.id] = image }
+        loadThumbnail("discover-\(video.id)", from: url) { self.discoverThumbnails[video.id] = $0 }
+    }
+
+    /// Tile pictures still downloading, by "<source>-<id>". A new topic or search cancels the previous one's, so they
+    /// don't hold up the new tiles.
+    @ObservationIgnored private var thumbnailTasks: [String: Task<Void, Never>] = [:]
+
+    private func loadThumbnail(_ key: String, from url: URL, then use: @escaping (NSImage) -> Void) {
+        guard thumbnailTasks[key] == nil else { return }
+        thumbnailTasks[key] = Task {
+            let image = await Self.remoteImage(url)   // nil when cancelled
+            guard !Task.isCancelled else { return }
+            thumbnailTasks[key] = nil
+            if let image { use(image) }
+        }
+    }
+
+    private func cancelThumbnails(_ prefix: String) {
+        for (key, task) in thumbnailTasks where key.hasPrefix(prefix) {
+            task.cancel()
+            thumbnailTasks[key] = nil
         }
     }
 
@@ -617,6 +640,7 @@ final class AppModel {
         workshopRequest += 1
         let request = workshopRequest
         if !more {
+            cancelThumbnails("workshop-")
             workshopQuery = query
             workshopItems = []
             workshopTotal = 0
@@ -646,20 +670,23 @@ final class AppModel {
     }
 
     private func loadWorkshopItemThumbnail(_ item: WorkshopItem) {
-        guard workshopItemThumbnails[item.id] == nil, let url = item.previewURL else { return }
-        Task {
-            guard let image = await Self.remoteImage(url) else { return }
-            workshopItemThumbnails[item.id] = image
-            if item.id == selectedWorkshopItemID { updateWorkshopPreview() }
+        guard workshopItemThumbnails[item.id] == nil, let url = item.thumbnailURL else { return }
+        loadThumbnail("workshop-\(item.id)", from: url) { image in
+            self.workshopItemThumbnails[item.id] = image
+            if item.id == self.selectedWorkshopItemID { self.updateWorkshopPreview() }
         }
     }
 
-    /// The picture behind the panel for a Workshop pick: the creator's screenshot when it's larger than the preview
-    /// (GIF previews are 160-256 px).
+    /// The picture behind the panel for a Workshop pick: the largest of the creator's screenshot, the full-size preview
+    /// (loaded on selection) and the tile's (GIF previews are 160-256 px).
     func workshopBackdrop(for item: WorkshopItem) -> NSImage? {
-        let screenshot = backdrops["workshop-\(item.id)"], preview = workshopItemThumbnails[item.id]
-        guard let screenshot, let preview else { return screenshot ?? preview }
-        return screenshot.pixelWidth >= preview.pixelWidth ? screenshot : preview
+        [backdrops["workshop-\(item.id)"], backdrops["workshop-preview-\(item.id)"], workshopItemThumbnails[item.id]]
+            .compactMap { $0 }.max { $0.pixelWidth < $1.pixelWidth }
+    }
+
+    /// The tile's picture is the full preview when it's a GIF (Steam doesn't scale those); a JPG's comes on selection.
+    private func hasFullWorkshopPreview(_ item: WorkshopItem) -> Bool {
+        item.previewURL == nil || backdrops["workshop-preview-\(item.id)"] != nil || workshopItemThumbnails[item.id]?.isAnimated == true
     }
 
     /// A Workshop pick whose best picture is under 1000 px: its frames, played full-window (Backdrop) and labelled
@@ -680,7 +707,8 @@ final class AppModel {
 
     /// Small pictures play as frames right away and are replaced by their 4x ML upscale when it's ready.
     private func updateWorkshopPreview() {
-        guard !isSnapshot, let item = selectedWorkshopItem, let image = workshopBackdrop(for: item),
+        // Until the full-size preview is in, the 360 px tile picture isn't judged (or upscaled) as low-res.
+        guard !isSnapshot, let item = selectedWorkshopItem, hasFullWorkshopPreview(item), let image = workshopBackdrop(for: item),
               image.pixelWidth < 1000 else {
             workshopUpscaleTask?.cancel()
             workshopPreview = nil
@@ -704,12 +732,15 @@ final class AppModel {
     func selectWorkshopItem(_ item: WorkshopItem) {
         guard !isBusy else { return }
         selectedWorkshopItemID = item.id == selectedWorkshopItemID ? nil : item.id
-        let key = "workshop-\(item.id)"
-        if selectedWorkshopItemID != nil, backdrops[key] == nil, let url = item.screenshotURL {
-            Task {
-                guard let image = await Self.remoteImage(url) else { return }
-                backdrops[key] = image
-                if item.id == selectedWorkshopItemID { updateWorkshopPreview() }
+        if selectedWorkshopItemID != nil {
+            let full = hasFullWorkshopPreview(item) ? nil : item.previewURL
+            for (key, url) in [("workshop-\(item.id)", item.screenshotURL), ("workshop-preview-\(item.id)", full)] {
+                guard backdrops[key] == nil, let url else { continue }
+                Task {
+                    guard let image = await Self.remoteImage(url) else { return }
+                    backdrops[key] = image
+                    if item.id == selectedWorkshopItemID { updateWorkshopPreview() }
+                }
             }
         }
         updateWorkshopPreview()
@@ -757,15 +788,24 @@ final class AppModel {
         displayName = item.title
         backdrops["source"] = workshopBackdrop(for: item)
         downloadSource = "Steam"
-        downloadDetail = "Your Steam app downloads it\(item.size > 0 ? " (\(item.size.formatted(.byteCount(style: .file))))" : ""). "
+        let detail = "Your Steam app downloads it\(item.size > 0 ? " (\(item.size.formatted(.byteCount(style: .file))))" : ""). "
             + "Meanwhile Steam shows you as playing Wallpaper Engine. Then you can trim it and set it as your wallpaper."
+        downloadDetail = detail
         startProgress("Downloading with Steam", flow: .download, step: .download)
 
         let proxy = workshop.proxy
         Task.detached {
             do {
                 guard await SteamDownload.downloadsAllowed(proxy: proxy) else { throw SteamDownloadError.paused }
-                let folder = try await downloader.run(id: item.id, started: { SteamDownload.recordDownload() }) { p in
+                let folder = try await downloader.run(id: item.id, waiting: {
+                    Task { @MainActor in
+                        self.downloadDetail = "Waiting for Steam to open and log in (up to 90 seconds). If Steam asks you to log in, "
+                            + "do that, and the download starts."
+                    }
+                }, started: {
+                    SteamDownload.recordDownload()
+                    Task { @MainActor in self.downloadDetail = detail }
+                }) { p in
                     Task { @MainActor in self.progress = p }
                 }
                 guard let video = WallpaperEngine.video(in: folder) else { throw SteamDownloadError.notAVideo }
@@ -1090,7 +1130,8 @@ final class AppModel {
         }
     }
 
-    private static func remoteImage(_ url: URL) async -> NSImage? {
+    /// Downloads and decodes off the main actor (nonisolated).
+    nonisolated private static func remoteImage(_ url: URL) async -> NSImage? {
         guard let (data, response) = try? await URLSession.shared.data(from: url),
               (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
         return NSImage(data: data)

@@ -70,6 +70,15 @@ struct ContentView: View {
                  + "logged in to an account that owns Wallpaper Engine, and shows you as playing Wallpaper Engine while it "
                  + "downloads. AerialSwap never sees your Steam login.\n\nOnly use wallpapers you're allowed to use.")
         }
+        .alert("Workshop needs Steam", isPresented: $model.showSteamNeeded) {
+            Button("Get Steam for Mac") { NSWorkspace.shared.open(SteamDownload.getSteamPage) }
+            Button("About Wallpaper Engine") { NSWorkspace.shared.open(WorkshopClient.storePage) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Wallpaper Engine is a paid wallpaper app on Steam. Its Workshop has thousands of video wallpapers made by "
+                 + "its community, and AerialSwap can use them if you own it.\n\n"
+                 + "Install Steam for Mac and log in with the account that owns Wallpaper Engine. Then open Workshop again.")
+        }
         .alert("Install helpers?", isPresented: toolInstallBinding) {
             Button("Install") { model.installTools() }
             Button("Cancel", role: .cancel) { model.cancelToolInstall() }

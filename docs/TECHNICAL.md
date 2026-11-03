@@ -150,7 +150,10 @@ Pixabay's API terms ask for results to be cached for 24 hours: the proxy caches 
 when Pixabay can't be reached). The limit is 100 requests per minute per key.
 
 **Discover → Workshop** browses Wallpaper Engine's video wallpapers and downloads one with the user's Steam for Mac.
-Unofficial: neither Valve nor Wallpaper Engine's developer offers this. Read [Steam Workshop downloads](#steam-workshop-downloads) under Known risks before changing it.
+Without Steam for Mac installed, Workshop can't be opened: an alert says to install Steam and log in with an account
+that owns Wallpaper Engine, with links to get Steam and to Wallpaper Engine's store page. (To see it with Steam
+installed, a test build honors `defaults write io.github.mxpalm.AerialSwap SimulateNoSteam -bool YES`.) Unofficial: neither Valve nor Wallpaper Engine's developer
+offers this. Read [Steam Workshop downloads](#steam-workshop-downloads) under Known risks before changing it.
 
 **Search** (`WorkshopDiscover.swift`): Steam's `IPublishedFileService/QueryFiles`, which needs a Steam Web API key.
 Release builds ask the Discover proxy (`/workshop`, see `Proxy/README.md`), which holds the key as the `STEAM_KEY`
@@ -158,7 +161,8 @@ secret; a key of one's own (`defaults write io.github.mxpalm.AerialSwap SteamKey
 directly with the same parameters. The query is always app 431960 with the required tags `Video` and `Everyone`
 (the proxy forces both, whatever the app sends); a topic adds one tag. Search ranks by relevance (query type 12),
 Trending is this month's most popular (3, 30 days), a topic its tag's best rated (0). Previews load only from
-Steam's image hosts over https. There's no video to stream before downloading: the tiles play the creator's
+Steam's image hosts over https; tiles ask Steam's image server for JPG previews scaled to 360 px (`imw`/`imh`, ~16x
+fewer bytes; GIFs come back as they are), and the full-size preview loads only for the selected item. There's no video to stream before downloading: the tiles play the creator's
 preview where it's an animated GIF (about half the video items; square, 160-256 px, at most 1 MB, like in Wallpaper
 Engine's own browser). Tiles and the full-window preview pause while the window isn't active, in Low Power Mode and
 with Reduce Motion (`MayAnimate`): animating 12 tiles in the background cost ~23% of a CPU core. The window shows the creator's first extra screenshot when it's larger
@@ -178,7 +182,9 @@ anything from Steam itself.
 2. If Steam already has the item (any library above), that copy is used and Steam isn't asked.
 3. The limits and the remote switch below are checked. A download counts (`SteamDownloadTimes`) once Steam accepted it
    (step 8), so attempts that fail earlier (Steam not logged in, Wallpaper Engine not owned) don't.
-4. Steam is started hidden and without focus if it isn't running.
+4. Steam is started hidden and without focus if it isn't running. Steam counts as installed only when macOS knows
+   `Steam.app` and its runtime (`Steam.AppBundle`) exists: deleting Steam.app leaves the runtime behind, and then the
+   button offers to get Steam instead.
 5. AerialSwap starts itself again as a child process: `AerialSwap --steam-download <id>` with `SteamAppId` and
    `SteamGameId` set to 431960. Steamworks binds a process to one app ID for its lifetime, so the app itself never
    loads Steamworks; while the child runs, Steam shows the user as playing Wallpaper Engine.
@@ -190,7 +196,8 @@ anything from Steam itself.
    account doesn't own Wallpaper Engine, it stops before asking for anything. The interface versions
    (`SteamApps_v0NN`, `SteamUGC_v0NN`) are looked up newest first, so a Steam update doesn't break it at once.
 8. `ISteamUGC::DownloadItem(id, highPriority)`, then `GetItemState` / `GetItemDownloadInfo` every half second.
-   The child prints `STARTED` once `DownloadItem` accepted it, `PROGRESS <done> <total>`, then `FOLDER <path>` once
+   The child prints `WAITING` while Steam is still starting or logging in (the app says so), `STARTED` once
+   `DownloadItem` accepted it, `PROGRESS <done> <total>`, then `FOLDER <path>` once
    the state is Installed (4) without NeedsUpdate, Downloading or DownloadPending (8, 16, 32), or `ERROR <message>`.
    It gives up after 3 minutes without progress (waiting in Steam's queue doesn't count as a stall) or an hour in
    all. The app reads the child's output to the end (at most 2 s after it exits) before looking for `FOLDER`. **Cancel** ends the child (Steam may still finish the download).

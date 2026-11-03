@@ -74,6 +74,14 @@ struct DiscoverTopic: Hashable, Identifiable, Sendable {
         DiscoverTopic(id: "space", title: "Space", query: "earth space"),
         DiscoverTopic(id: "cities", title: "Cities", query: "city night"),
         DiscoverTopic(id: "forest", title: "Forest", query: "forest"),
+        DiscoverTopic(id: "lakes", title: "Lakes", query: "lake"),
+        DiscoverTopic(id: "waterfalls", title: "Waterfalls", query: "waterfall"),
+        DiscoverTopic(id: "desert", title: "Desert", query: "desert dunes"),
+        DiscoverTopic(id: "snow", title: "Snow", query: "snow winter"),
+        DiscoverTopic(id: "rain", title: "Rain", query: "rain"),
+        DiscoverTopic(id: "sunsets", title: "Sunsets", query: "sunset"),
+        DiscoverTopic(id: "underwater", title: "Underwater", query: "underwater"),
+        DiscoverTopic(id: "aurora", title: "Northern Lights", query: "aurora"),
     ]
 }
 

@@ -70,7 +70,16 @@ struct WorkshopTopic: Hashable, Identifiable, Sendable {
         WorkshopTopic(id: "landscape", title: "Landscape", tag: "Landscape"),
         WorkshopTopic(id: "nature", title: "Nature", tag: "Nature"),
         WorkshopTopic(id: "relaxing", title: "Relaxing", tag: "Relaxing"),
+        // Subjects that aren't Workshop tags are searches.
+        WorkshopTopic(id: "space", title: "Space", search: "space"),
+        WorkshopTopic(id: "city", title: "City", search: "city"),
+        WorkshopTopic(id: "rain", title: "Rain", search: "rain"),
+        WorkshopTopic(id: "ocean", title: "Ocean", search: "ocean"),
         WorkshopTopic(id: "scifi", title: "Sci-Fi", tag: "Sci-Fi"),
+        WorkshopTopic(id: "fantasy", title: "Fantasy", tag: "Fantasy"),
+        WorkshopTopic(id: "cyberpunk", title: "Cyberpunk", tag: "Cyberpunk"),
+        WorkshopTopic(id: "abstract", title: "Abstract", tag: "Abstract"),
+        WorkshopTopic(id: "retro", title: "Retro", tag: "Retro"),
         WorkshopTopic(id: "pixel", title: "Pixel Art", tag: "Pixel art"),
         WorkshopTopic(id: "anime", title: "Anime", tag: "Anime"),
     ]

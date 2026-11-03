@@ -692,7 +692,8 @@ final class AppModel {
         guard let frames = PreviewFrames(image) else { workshopPreview = nil; return }
         workshopPreview = WorkshopPreview(id: item.id, source: source, frames: frames)
         workshopUpscaleTask = Task {
-            let upscaled = await Task.detached(priority: .userInitiated) { await PreviewUpscaler.upscale(frames) }.value
+            // Runs off the main actor (a nonisolated async function) and stops when this task is cancelled.
+            let upscaled = await PreviewUpscaler.upscale(frames)
             guard !Task.isCancelled, let upscaled, workshopPreview?.id == item.id else { return }
             workshopPreview = WorkshopPreview(id: item.id, source: source, frames: upscaled, upscaled: true)
         }
@@ -733,13 +734,22 @@ final class AppModel {
     /// The user's Steam downloads the item; then it opens like a video from the Wallpaper Engine dialog.
     private func startSteamDownload(_ item: WorkshopItem) {
         guard !isBusy else { return }
-        // Already downloaded: used as it is, Steam isn't asked.
-        if let video = WallpaperEngine.downloadedVideo(id: item.id) {
-            guard video.rating == nil else { fail(SteamDownloadError.notForEveryone); return }
-            Log.info("Steam: Workshop item \(item.id) is already downloaded")
-            useWorkshopVideo(video)
-            return
+        Task {
+            // Already downloaded: used as it is, Steam isn't asked. Looked up off the main thread: Steam libraries can be
+            // on drives that take seconds to wake up.
+            let existing = await Task.detached { WallpaperEngine.downloadedVideo(id: item.id) }.value
+            guard !isBusy else { return }
+            if let video = existing {
+                guard video.rating == nil else { fail(SteamDownloadError.notForEveryone); return }
+                Log.info("Steam: Workshop item \(item.id) is already downloaded")
+                useWorkshopVideo(video)
+            } else {
+                downloadWithSteam(item)
+            }
         }
+    }
+
+    private func downloadWithSteam(_ item: WorkshopItem) {
         if let reason = SteamDownload.limitReason() { notice = Notice(kind: .info, text: reason); return }
         pauseBackgroundVideo(in: .discover)
         let downloader = SteamDownloader()
@@ -755,8 +765,7 @@ final class AppModel {
         Task.detached {
             do {
                 guard await SteamDownload.downloadsAllowed(proxy: proxy) else { throw SteamDownloadError.paused }
-                SteamDownload.recordDownload()
-                let folder = try await downloader.run(id: item.id) { p in
+                let folder = try await downloader.run(id: item.id, started: { SteamDownload.recordDownload() }) { p in
                     Task { @MainActor in self.progress = p }
                 }
                 guard let video = WallpaperEngine.video(in: folder) else { throw SteamDownloadError.notAVideo }
@@ -1288,6 +1297,7 @@ final class AppModel {
         sourceURL = nil
         let reason = error.localizedDescription
         Log.error("Cannot read \(url.path): \(reason)")
+        pendingConversionName = displayName   // set on both paths, so an earlier, cancelled conversion's title never sticks
         guard let ffmpeg = FFmpeg.find() else {
             // Offer to install ffmpeg; once it's there, the conversion starts right away.
             toolInstallRequest = ToolInstallRequest(tools: [.ffmpeg],
@@ -1296,7 +1306,6 @@ final class AppModel {
             return
         }
         pendingConversion = url
-        pendingConversionName = displayName
         conversionPrompt = "macOS can't play “\(url.lastPathComponent)” directly (\(reason)).\n\n"
             + "AerialSwap can convert it with ffmpeg (\(ffmpeg.path)) first. This takes roughly as long as the "
             + "video, needs a few GB of temporary disk space and drops the audio."

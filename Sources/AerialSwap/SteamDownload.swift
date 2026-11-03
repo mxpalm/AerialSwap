@@ -41,15 +41,16 @@ enum SteamDownload {
     static func library() -> URL? {
         let bundle = steamRoot.appending(path: "Steam.AppBundle")
         let known = bundle.appending(path: "Steam/Contents/MacOS/Frameworks/Steam Helper.app/Contents/MacOS/libsteam_api.dylib")
-        var candidates = [known]
+        if FileManager.default.fileExists(atPath: known.path), isSignedByValve(known) { return known }
+        var candidates: [URL] = []
         if let walker = FileManager.default.enumerator(at: bundle, includingPropertiesForKeys: nil) {
             var seen = 0
             while let url = walker.nextObject() as? URL, seen < 50_000 {
                 seen += 1
-                if url.lastPathComponent == "libsteam_api.dylib", url != known { candidates.append(url) }
+                if url.lastPathComponent == "libsteam_api.dylib" { candidates.append(url) }
             }
         }
-        return candidates.first { FileManager.default.fileExists(atPath: $0.path) && isSignedByValve($0) }
+        return candidates.first(where: isSignedByValve)
     }
 
     /// The file's code signature is valid and from Valve's Developer ID.
@@ -111,7 +112,8 @@ enum SteamDownload {
     // MARK: - Child process
 
     /// `AerialSwap --steam-download <id>`, started by SteamDownloader with SteamAppId set. Prints one line per event:
-    /// "PROGRESS <done> <total>", then "FOLDER <path>" when the item is installed, or "ERROR <message>".
+    /// "STARTED" once Steam accepted the download, "PROGRESS <done> <total>", then "FOLDER <path>" when the item is
+    /// installed, or "ERROR <message>".
     static func runChild(_ args: [String]) -> Int32 {
         guard args.count == 2, isValidID(args[1]), let id = UInt64(args[1]) else { emit("ERROR usage: --steam-download <id>"); return 2 }
         guard let path = library()?.path else {
@@ -168,6 +170,7 @@ enum SteamDownload {
             emit("ERROR Steam didn't accept the download. Does this Steam account own Wallpaper Engine?")
             return 1
         }
+        emit("STARTED")
         // Item states: installed 4, needs update 8, downloading 16, download pending 32.
         var lastDone: UInt64 = 0
         started = Date.now
@@ -177,7 +180,8 @@ enum SteamDownload {
             let state = itemState(ugc, id)
             var done: UInt64 = 0, total: UInt64 = 0
             _ = downloadInfo(ugc, id, &done, &total)
-            if done != lastDone { lastDone = done; lastChange = .now }
+            // Waiting in Steam's queue (e.g. behind a game update) isn't a stall.
+            if done != lastDone || state & 32 != 0 { lastDone = done; lastChange = .now }
             emit("PROGRESS \(done) \(total)")
             if state & 4 != 0, state & (8 | 16 | 32) == 0 {
                 var size: UInt64 = 0, timestamp: UInt32 = 0
@@ -238,8 +242,9 @@ final class SteamDownloader: @unchecked Sendable {
         }
     }
 
-    /// The downloaded wallpaper's folder (inside Steam's workshop/content/431960).
-    func run(id: String, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
+    /// The downloaded wallpaper's folder (inside Steam's workshop/content/431960). `started` is called once Steam has
+    /// accepted the download (the account owns Wallpaper Engine), so only real downloads count toward the limits.
+    func run(id: String, started: @escaping @Sendable () -> Void, progress: @escaping @Sendable (Double) -> Void) async throws -> URL {
         guard SteamDownload.isValidID(id) else { throw SteamDownloadError.failed("That isn't a Workshop item.") }
         guard SteamDownload.isInstalled else { throw SteamDownloadError.notInstalled }
         await SteamDownload.launchIfNeeded()
@@ -260,11 +265,15 @@ final class SteamDownloader: @unchecked Sendable {
         nonisolated(unsafe) var pending = ""     // only touched by the stdout handler
         let result = Result()
         out.fileHandleForReading.readabilityHandler = { handle in
-            pending += String(decoding: handle.availableData, as: UTF8.self)
+            let data = handle.availableData
+            guard !data.isEmpty else { result.finishOutput(); return }   // end of output
+            pending += String(decoding: data, as: UTF8.self)
             while let newline = pending.firstIndex(of: "\n") {
                 let line = String(pending[..<newline])
                 pending.removeSubrange(...newline)
-                if line.hasPrefix("PROGRESS ") {
+                if line == "STARTED" {
+                    started()
+                } else if line.hasPrefix("PROGRESS ") {
                     let numbers = line.split(separator: " ").dropFirst().compactMap { Double($0) }
                     if numbers.count == 2, numbers[1] > 0 { progress(min(1, numbers[0] / numbers[1])) }
                 } else if line.hasPrefix("FOLDER ") {
@@ -290,6 +299,9 @@ final class SteamDownloader: @unchecked Sendable {
             }
         }
         if lock.withLock({ cancelled }) { throw SteamDownloadError.cancelled }
+        // The exit can be handled before the last lines (FOLDER) are read: wait for the end of the output, at most 2 s.
+        Task { try? await Task.sleep(for: .seconds(2)); result.finishOutput() }
+        await result.outputEnded()
         let (folder, error) = result.values
         guard status == 0, let folder else {
             let message = error ?? "Steam's download helper stopped (exit code \(status))."
@@ -312,5 +324,27 @@ final class SteamDownloader: @unchecked Sendable {
         func set(folder: String) { lock.withLock { self.folder = folder } }
         func set(error: String) { lock.withLock { self.error = error } }
         var values: (String?, String?) { lock.withLock { (folder, error) } }
+
+        private var outputFinished = false
+        private var waiter: CheckedContinuation<Void, Never>?
+
+        func finishOutput() {
+            let waiter: CheckedContinuation<Void, Never>? = lock.withLock {
+                outputFinished = true
+                defer { self.waiter = nil }
+                return self.waiter
+            }
+            waiter?.resume()
+        }
+
+        func outputEnded() async {
+            await withCheckedContinuation { continuation in
+                let finished = lock.withLock {
+                    if !outputFinished { waiter = continuation }
+                    return outputFinished
+                }
+                if finished { continuation.resume() }
+            }
+        }
     }
 }

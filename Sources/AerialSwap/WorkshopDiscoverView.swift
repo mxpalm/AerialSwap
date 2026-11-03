@@ -38,7 +38,6 @@ struct WorkshopPanel: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 8) {
             DiscoverSourcePicker(model: model)
-            DiscoverOptionsMenu(model: model)
             Spacer()
             RenderableLink(destination: WorkshopClient.homepage, flat: model.isSnapshot) {
                 Label("Workshop", systemImage: "arrow.up.right").labelStyle(TrailingIconLabelStyle())
@@ -69,29 +68,13 @@ struct WorkshopPanel: View {
         .disabled(!model.workshop.isAvailable)
     }
 
+    /// Topic chips and the options menu; none is highlighted while a search is shown.
     private var topics: some View {
-        FitOrScroll(.horizontal, flat: model.isSnapshot) {
-            HStack(spacing: 6) {
-                ForEach(WorkshopTopic.all) { topic in
-                    let isOn = model.workshopQuery.isEmpty && model.workshopTopic == topic
-                    Button { model.selectWorkshopTopic(topic) } label: {
-                        Text(topic.title)
-                            .font(.system(size: 12, weight: isOn ? .semibold : .regular))
-                            .fixedSize()
-                            .padding(.horizontal, 11)
-                            .frame(height: 26)
-                            .foregroundStyle(isOn ? Theme.ink : .white)
-                            .background(Capsule().fill(isOn ? Color.white : Color.white.opacity(0.1)))
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(isOn ? .isSelected : [])
-                }
-            }
+        TopicRow(model: model, topics: WorkshopTopic.all.map { TopicChoice(id: $0.id, title: $0.title) },
+                 selectedID: model.workshopQuery.isEmpty ? model.workshopTopic.id : nil,
+                 enabled: model.workshop.isAvailable || model.isSnapshot) { id in
+            if let topic = WorkshopTopic.all.first(where: { $0.id == id }) { model.selectWorkshopTopic(topic) }
         }
-        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-        .clipped()
-        .disabled(!model.workshop.isAvailable && !model.isSnapshot)
     }
 
     @ViewBuilder private var content: some View {

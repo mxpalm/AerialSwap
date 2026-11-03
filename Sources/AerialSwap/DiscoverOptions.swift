@@ -39,12 +39,91 @@ struct DiscoverOptions: Codable, Equatable, Sendable {
     }
 }
 
-/// "Popular · 4K ▾": sort order and resolution for both sources.
+/// A topic chip of either source.
+struct TopicChoice: Identifiable {
+    var id: String
+    var title: String
+}
+
+/// Topic chips that fit the panel, then the options menu, which holds the topics that don't fit ("More Topics").
+/// The selected topic always stays a chip: it takes the place of the last one that fits.
+struct TopicRow: View {
+    @Bindable var model: AppModel
+    let topics: [TopicChoice]
+    let selectedID: String?       // nil while a search is shown
+    var enabled = true
+    let select: (String) -> Void
+
+    private static let spacing: CGFloat = 6
+
+    var body: some View {
+        GeometryReader { geo in
+            let (visible, more) = split(width: geo.size.width)
+            HStack(spacing: Self.spacing) {
+                ForEach(visible) { chip($0) }
+                DiscoverOptionsMenu(model: model, moreTopics: more, selectedID: selectedID, select: select)
+            }
+        }
+        .frame(height: 26)
+    }
+
+    private func chip(_ topic: TopicChoice) -> some View {
+        let isOn = topic.id == selectedID
+        return Button { select(topic.id) } label: {
+            Text(topic.title)
+                .font(.system(size: 12, weight: isOn ? .semibold : .regular))
+                .fixedSize()
+                .padding(.horizontal, 11)
+                .frame(height: 26)
+                .foregroundStyle(isOn ? Theme.ink : .white)
+                .background(Capsule().fill(isOn ? Color.white : Color.white.opacity(0.1)))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+
+    /// The chips that fit next to the menu, in order, and the rest for the menu.
+    private func split(width: CGFloat) -> ([TopicChoice], [TopicChoice]) {
+        let available = width - DiscoverOptionsMenu.width(label: DiscoverOptionsMenu.label(model.discoverOptions)) - Self.spacing
+        var visible: [TopicChoice] = [], used: CGFloat = 0
+        for topic in topics {
+            let needed = Self.chipWidth(topic.title) + (visible.isEmpty ? 0 : Self.spacing)
+            guard used + needed <= available else { break }
+            visible.append(topic); used += needed
+        }
+        if let selected = topics.first(where: { $0.id == selectedID }), !visible.contains(where: { $0.id == selected.id }) {
+            let needed = Self.chipWidth(selected.title) + Self.spacing
+            while let last = visible.last, used + needed > available {
+                visible.removeLast(); used -= Self.chipWidth(last.title) + Self.spacing
+            }
+            visible.append(selected)
+        }
+        let shown = Set(visible.map(\.id))
+        return (visible, topics.filter { !shown.contains($0.id) })
+    }
+
+    /// Measured semibold (the selected weight), so a chip never grows past its slot when selected.
+    static func chipWidth(_ title: String) -> CGFloat {
+        ceil((title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]).width) + 22
+    }
+}
+
+/// "Popular · 4K ⌄": the topics that don't fit the row, sort order and resolution, for both sources.
 struct DiscoverOptionsMenu: View {
     @Bindable var model: AppModel
+    var moreTopics: [TopicChoice] = []
+    var selectedID: String?
+    var select: (String) -> Void = { _ in }
 
-    private var label: String {
-        model.discoverOptions.sort.title + (model.discoverOptions.only4K ? " · 4K" : "")
+    static func label(_ options: DiscoverOptions) -> String {
+        options.sort.title + (options.only4K ? " · 4K" : "")
+    }
+
+    /// The label's width: icon, text, chevron and padding (TopicRow leaves room for it).
+    static func width(label: String) -> CGFloat {
+        ceil((label as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]).width) + 62
     }
 
     var body: some View {
@@ -52,6 +131,14 @@ struct DiscoverOptionsMenu: View {
             labelView
         } else {
             Menu {
+                if !moreTopics.isEmpty {
+                    Section("More Topics") {
+                        ForEach(moreTopics) { topic in
+                            Toggle(topic.title, isOn: Binding(get: { topic.id == selectedID }, set: { _ in select(topic.id) }))
+                        }
+                    }
+                    Divider()
+                }
                 Picker("Sort", selection: Binding(get: { model.discoverOptions.sort }, set: { model.setDiscoverSort($0) })) {
                     ForEach(DiscoverSort.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
@@ -71,15 +158,17 @@ struct DiscoverOptionsMenu: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .disabled(model.isBusy)
-            .help("Sort and resolution, for Pixabay and the Workshop")
+            .help(moreTopics.isEmpty ? "Sort and resolution, for Pixabay and the Workshop" : "More topics, sort and resolution")
         }
     }
 
     private var labelView: some View {
         HStack(spacing: 4) {
             Image(systemName: "line.3.horizontal.decrease")
-            Text(label)
+            Text(Self.label(model.discoverOptions))
+            Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).opacity(0.7)
         }
+        .fixedSize()
         .font(.system(size: 12, weight: .semibold))
         .padding(.horizontal, 10)
         .frame(height: 26)

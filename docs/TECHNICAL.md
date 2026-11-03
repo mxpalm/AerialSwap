@@ -132,8 +132,9 @@ the 4K version (1080p when Pixabay has no 4K) into the temp folder and opens it 
 set it. The library keeps the credit ("<user> on Pixabay"); right-click → **View on Pixabay**.
 Only real footage (`video_type=film`) of at least 1920 px width is listed, with SafeSearch on.
 
-The options menu next to Pixabay | Workshop applies to both sources and is kept between launches (`DiscoverOptions`
-default): **Popular** or **Newest** (Pixabay `order=popular|latest`; Workshop by votes, this month's trend or relevance,
+The topic row shows the topics that fit the panel, then the options menu (`TopicRow`); the other topics are in that
+menu under **More Topics**, and a selected one takes the last chip's place. The menu's options apply to both sources
+and are kept between launches (`DiscoverOptions` default): **Popular** or **Newest** (Pixabay `order=popular|latest`; Workshop by votes, this month's trend or relevance,
 or by date with query type 1), and **4K Only** (Pixabay `min_width=3840`; Workshop the creator's tag `3840 x 2160`).
 Tiles of videos already in the library (matched by their page, `sourcePage`) say **In Library**; Workshop items that
 Steam already downloaded say **In Steam** (adding those is instant and doesn't count as a download).

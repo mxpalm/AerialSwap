@@ -63,7 +63,9 @@ or Whisky). AerialSwap never sees your Steam login, and it can't use scene or we
 Downloading this way isn't an official Wallpaper Engine or Steam feature: AerialSwap asks your Steam app the way
 Wallpaper Engine itself does, and Steam shows you as playing Wallpaper Engine meanwhile. To keep it to normal use,
 AerialSwap checks that your account owns Wallpaper Engine, reuses wallpapers Steam already downloaded, and allows at
-most 10 downloads an hour and 30 a day. You use it at your own risk.
+most 10 downloads an hour and 30 a day. If Valve or Wallpaper Engine's developer object, downloads can be paused
+for everyone without an update. You use it at your own risk. The details and the risks are in
+[TECHNICAL.md](docs/TECHNICAL.md#steam-workshop-downloads).
 
 Any length works. Videos in 4K, filmed in landscape (wider than tall) with slow camera movement, look best.
 

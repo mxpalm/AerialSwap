@@ -32,7 +32,21 @@ enum Snapshot {
                 m.discoverSource = .workshop
                 m.selectedWorkshopItemID = m.workshopItems[1].id
             }),
+            ("04c3-discover-downloading", { m in
+                m.discoverSource = .pixabay
+                let video = m.discoverVideos[2]
+                m.backgroundDownload = BackgroundDownload(key: "discover-\(video.id)", title: video.title, source: "Pixabay",
+                                                          state: .running(0.42), detail: "Getting the 4K version (182 MB). Keep browsing meanwhile; then you trim it and set it as your wallpaper.")
+                m.selectedDiscoverID = m.discoverVideos[0].id
+            }),
+            ("04c4-workshop-downloaded", { m in
+                m.discoverSource = .workshop
+                let item = m.workshopItems[1]
+                m.backgroundDownload = BackgroundDownload(key: "workshop-\(item.id)", title: item.title, source: "Steam",
+                                                          state: .ready, detail: "")
+            }),
             ("04d-url-import", { m in
+                m.backgroundDownload = nil
                 m.discoverSource = .pixabay
                 m.section = .library
                 m.urlImportText = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"

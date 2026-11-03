@@ -109,7 +109,7 @@ Click on the video itself to hide the library and see the wallpaper the way your
 
 Click **Discover** at the top to browse thousands of free, high-quality videos from [Pixabay](https://pixabay.com).
 Pick a topic or search for anything, click a video to preview it, then **Use This Video**. AerialSwap downloads it
-in 4K and takes you to step 2.
+in 4K in the background (keep browsing meanwhile; the top bar shows the progress) and takes you to step 2.
 
 ## Questions
 

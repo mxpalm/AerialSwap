@@ -206,6 +206,7 @@ struct TopBarActions: View {
     @Bindable var model: AppModel
 
     var body: some View {
+        if let download = model.backgroundDownload { DownloadChip(model: model, download: download) }
         AddVideoMenu(model: model, kind: .primary, height: 32)
 
         Menu {

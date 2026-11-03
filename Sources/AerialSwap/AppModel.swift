@@ -141,6 +141,11 @@ final class AppModel {
     @ObservationIgnored private var workshopPage = 0
     @ObservationIgnored private var workshopRequest = 0
     private var steamDownloader: SteamDownloader?
+    /// A Discover download (Pixabay or Steam) running while the user keeps browsing: the chip in the top bar.
+    var backgroundDownload: BackgroundDownload?
+    /// Opens the finished download like a video the user added (set when it's ready).
+    @ObservationIgnored private var openFinishedDownload: (() -> Void)?
+    @ObservationIgnored private var discardFinishedDownload: (() -> Void)?   // the chip's ✕ on a finished download
     /// Set while the loaded source is a Pixabay or Workshop video, so the library keeps the credit and its page.
     @ObservationIgnored private var sourceCredit: (credit: String, page: String?)?
     private var downloader: VideoDownloader?
@@ -497,10 +502,12 @@ final class AppModel {
 
     /// Whether a Discover pick is already in the library (by its page), or downloaded by Steam.
     func status(of video: DiscoverVideo) -> DiscoverItemStatus? {
-        libraryPages.contains(video.pageURL) ? .inLibrary : nil
+        if backgroundDownload?.key == "discover-\(video.id)" { return backgroundDownload?.isReady == true ? .downloaded : .downloading }
+        return libraryPages.contains(video.pageURL) ? .inLibrary : nil
     }
 
     func status(of item: WorkshopItem) -> DiscoverItemStatus? {
+        if backgroundDownload?.key == "workshop-\(item.id)" { return backgroundDownload?.isReady == true ? .downloaded : .downloading }
         if let page = item.page?.absoluteString, libraryPages.contains(page) { return .inLibrary }
         return steamDownloadedIDs.contains(item.id) ? .inSteam : nil
     }
@@ -617,43 +624,98 @@ final class AppModel {
         showBackgroundVideo()
     }
 
-    /// Downloads the selected video (4K when available) and opens it like a video the user added.
+    /// Downloads the selected video (4K when available) in the background, then opens it like a video the user added.
+    /// Again on a finished download opens it.
     func downloadSelectedDiscover() {
-        guard !isBusy, let video = selectedDiscoverVideo, let url = URL(string: video.download.url) else { return }
-        pauseBackgroundVideo(in: .discover)
+        guard let video = selectedDiscoverVideo else { return }
+        if backgroundDownload?.key == "discover-\(video.id)" { openBackgroundDownload(); return }
+        guard !isBusy, backgroundDownload == nil, let url = URL(string: video.download.url) else { return }
         let destination = Self.workDir().appending(path: "pixabay-\(video.id).mp4")
         let downloader = VideoDownloader()
         self.downloader = downloader
-        displayName = video.title
-        backdrops["source"] = backdrops["discover-\(video.id)"]
-        downloadSource = "Pixabay"
-        downloadDetail = "Getting the \(video.is4K ? "4K" : "1080p") version (\(video.download.size.formatted(.byteCount(style: .file)))). "
-            + "Then you can trim it and set it as your wallpaper."
-        startProgress("Downloading from Pixabay", flow: .download, step: .download)
+        let key = "discover-\(video.id)"
+        backgroundDownload = BackgroundDownload(
+            key: key, title: video.title, source: "Pixabay", state: .running(0),
+            detail: "Getting the \(video.is4K ? "4K" : "1080p") version (\(video.download.size.formatted(.byteCount(style: .file)))). "
+                + "Keep browsing meanwhile; then you trim it and set it as your wallpaper.")
+        notice = nil
         Log.info("Discover: downloading \(video.id) (\(video.download.width)x\(video.download.height), \(video.download.size) bytes)")
 
         Task.detached {
             do {
                 try await downloader.run(url, to: destination) { p in
-                    Task { @MainActor in self.progress = p }
+                    Task { @MainActor in self.updateBackgroundDownload(key, .running(p)) }
                 }
                 await MainActor.run {
-                    self.stopProgress()
-                    if let old = self.convertedTempURL { try? FileManager.default.removeItem(at: old) }
-                    self.convertedTempURL = destination   // deleted once it's saved, like an ffmpeg conversion
-                    self.sourceCredit = (video.credit, video.pageURL)
-                    self.loadSource(destination, displayName: video.title)
+                    self.downloader = nil
+                    self.finishBackgroundDownload(key, stillWanted: self.selectedDiscoverID == video.id) {
+                        if let old = self.convertedTempURL { try? FileManager.default.removeItem(at: old) }
+                        self.convertedTempURL = destination   // deleted once it's saved, like an ffmpeg conversion
+                        self.sourceCredit = (video.credit, video.pageURL)
+                        self.loadSource(destination, displayName: video.title)
+                    } discard: {
+                        try? FileManager.default.removeItem(at: destination)
+                    }
                 }
             } catch {
                 await MainActor.run {
-                    self.stopProgress()
-                    self.displayName = nil
+                    self.downloader = nil
                     try? FileManager.default.removeItem(at: destination)
-                    if case DiscoverError.cancelled = error { self.notice = Notice(kind: .info, text: "Download cancelled.") }
-                    else { self.fail(error) }
-                    self.showBackgroundVideo()
+                    self.failBackgroundDownload(key, error, cancelled: { if case DiscoverError.cancelled = $0 { true } else { false } })
                 }
             }
+        }
+    }
+
+    // MARK: - Discover: downloads in the background
+
+    private func updateBackgroundDownload(_ key: String, _ state: BackgroundDownload.State, detail: String? = nil) {
+        guard backgroundDownload?.key == key else { return }
+        backgroundDownload?.state = state
+        if let detail { backgroundDownload?.detail = detail }
+    }
+
+    /// Opens the finished download right away when the user is still looking at it (and free), else the chip offers it.
+    private func finishBackgroundDownload(_ key: String, stillWanted: Bool, open: @escaping () -> Void, discard: @escaping () -> Void) {
+        guard let download = backgroundDownload, download.key == key else { discard(); return }
+        Log.info("Discover: \(download.source) download of \(key) finished")
+        openFinishedDownload = open
+        discardFinishedDownload = discard
+        backgroundDownload?.state = .ready
+        if stillWanted, canOpenBackgroundDownload, section == .discover {
+            openBackgroundDownload()
+        }
+    }
+
+    private func failBackgroundDownload(_ key: String, _ error: Error, cancelled: (Error) -> Bool) {
+        guard backgroundDownload?.key == key else { return }
+        backgroundDownload = nil
+        if cancelled(error) { notice = Notice(kind: .info, text: "Download cancelled.") }
+        else { fail(error) }
+    }
+
+    /// Only from Home, with nothing else running: opening replaces what's on the trim screen.
+    var canOpenBackgroundDownload: Bool {
+        backgroundDownload?.isReady == true && !isBusy && screen == .home && done == nil
+    }
+
+    func openBackgroundDownload() {
+        guard canOpenBackgroundDownload, let open = openFinishedDownload else { return }
+        backgroundDownload = nil
+        openFinishedDownload = nil; discardFinishedDownload = nil
+        open()
+    }
+
+    /// The chip's ✕: stops a running download, or drops a finished one that wasn't opened.
+    func cancelBackgroundDownload() {
+        guard let download = backgroundDownload else { return }
+        if download.isReady {
+            backgroundDownload = nil
+            discardFinishedDownload?()
+            openFinishedDownload = nil; discardFinishedDownload = nil
+        } else {
+            downloader?.cancel()
+            steamDownloader?.cancel()
         }
     }
 
@@ -805,7 +867,9 @@ final class AppModel {
 
     /// Download with Steam: asks once whether that's okay (see `confirmSteamDownload`), then downloads.
     func downloadSelectedWorkshopItem() {
-        guard !isBusy, let item = selectedWorkshopItem else { return }
+        guard let item = selectedWorkshopItem else { return }
+        if backgroundDownload?.key == "workshop-\(item.id)" { openBackgroundDownload(); return }
+        guard !isBusy, backgroundDownload == nil else { return }
         guard SteamDownload.isInstalled else { fail(SteamDownloadError.notInstalled); return }
         guard UserDefaults.standard.bool(forKey: Self.steamConsentKey) else { confirmSteamDownload = true; return }
         startSteamDownload(item)
@@ -823,7 +887,7 @@ final class AppModel {
             // Already downloaded: used as it is, Steam isn't asked. Looked up off the main thread: Steam libraries can be
             // on drives that take seconds to wake up.
             let existing = await Task.detached { WallpaperEngine.downloadedVideo(id: item.id) }.value
-            guard !isBusy else { return }
+            guard !isBusy, backgroundDownload == nil else { return }
             if let video = existing {
                 guard video.rating == nil else { fail(SteamDownloadError.notForEveryone); return }
                 Log.info("Steam: Workshop item \(item.id) is already downloaded")
@@ -836,16 +900,13 @@ final class AppModel {
 
     private func downloadWithSteam(_ item: WorkshopItem) {
         if let reason = SteamDownload.limitReason() { notice = Notice(kind: .info, text: reason); return }
-        pauseBackgroundVideo(in: .discover)
         let downloader = SteamDownloader()
         steamDownloader = downloader
-        displayName = item.title
-        backdrops["source"] = workshopBackdrop(for: item)
-        downloadSource = "Steam"
+        let key = "workshop-\(item.id)"
         let detail = "Your Steam app downloads it\(item.size > 0 ? " (\(item.size.formatted(.byteCount(style: .file))))" : ""). "
-            + "Meanwhile Steam shows you as playing Wallpaper Engine. Then you can trim it and set it as your wallpaper."
-        downloadDetail = detail
-        startProgress("Downloading with Steam", flow: .download, step: .download)
+            + "Meanwhile Steam shows you as playing Wallpaper Engine. Keep browsing; then you trim it and set it as your wallpaper."
+        backgroundDownload = BackgroundDownload(key: key, title: item.title, source: "Steam", state: .running(0), detail: detail)
+        notice = nil
 
         let proxy = workshop.proxy
         Task.detached {
@@ -853,29 +914,30 @@ final class AppModel {
                 guard await SteamDownload.downloadsAllowed(proxy: proxy) else { throw SteamDownloadError.paused }
                 let folder = try await downloader.run(id: item.id, waiting: {
                     Task { @MainActor in
-                        self.downloadDetail = "Waiting for Steam to open and log in (up to 90 seconds). If Steam asks you to log in, "
-                            + "do that, and the download starts."
+                        self.updateBackgroundDownload(key, .waiting("Waiting for Steam"),
+                                                      detail: "Waiting for Steam to open and log in (up to 90 seconds). If Steam asks you to "
+                                                          + "log in, do that, and the download starts.")
                     }
                 }, started: {
                     SteamDownload.recordDownload()
-                    Task { @MainActor in self.downloadDetail = detail }
+                    Task { @MainActor in self.updateBackgroundDownload(key, .running(0), detail: detail) }
                 }) { p in
-                    Task { @MainActor in self.progress = p }
+                    Task { @MainActor in self.updateBackgroundDownload(key, .running(p)) }
                 }
                 guard let video = WallpaperEngine.video(in: folder) else { throw SteamDownloadError.notAVideo }
                 guard video.rating == nil else { throw SteamDownloadError.notForEveryone }
                 await MainActor.run {
-                    self.stopProgress()
+                    self.steamDownloader = nil
                     self.refreshSteamDownloads()
-                    self.useWorkshopVideo(video, credit: item.credit)
+                    let stillWanted = self.discoverSource == .workshop && self.selectedWorkshopItemID == item.id
+                    self.finishBackgroundDownload(key, stillWanted: stillWanted) {
+                        self.useWorkshopVideo(video, credit: item.credit)
+                    } discard: {}   // Steam's copy stays, like any Workshop download
                 }
             } catch {
                 await MainActor.run {
-                    self.stopProgress()
-                    self.displayName = nil
-                    if case SteamDownloadError.cancelled = error { self.notice = Notice(kind: .info, text: "Download cancelled.") }
-                    else { self.fail(error) }
-                    self.showBackgroundVideo()
+                    self.steamDownloader = nil
+                    self.failBackgroundDownload(key, error, cancelled: { if case SteamDownloadError.cancelled = $0 { true } else { false } })
                 }
             }
         }
@@ -1637,9 +1699,7 @@ final class AppModel {
     func cancel() {
         transcoder?.cancel()
         converter?.cancel()
-        downloader?.cancel()
         urlImporter?.cancel()
-        steamDownloader?.cancel()
         toolInstaller?.cancel()
     }
 
@@ -1824,6 +1884,8 @@ final class AppModel {
     /// Stops running work (ffmpeg is a separate process and would outlive the app) and deletes temp files.
     private func shutdown() {
         cancel()
+        downloader?.cancel()        // Discover downloads in the background (cancelBackgroundDownload)
+        steamDownloader?.cancel()
         Self.removeWorkDir()
     }
 

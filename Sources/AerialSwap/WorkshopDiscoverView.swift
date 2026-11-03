@@ -145,13 +145,36 @@ struct WorkshopPanel: View {
         .padding(20)
     }
 
+    /// The selected item's own background download, if it has one.
+    private var download: BackgroundDownload? {
+        guard let item = model.selectedWorkshopItem, let download = model.backgroundDownload,
+              download.key == "workshop-\(item.id)" else { return nil }
+        return download
+    }
+
+    private var buttonTitle: String {
+        switch download?.state {
+        case .ready: "Open"
+        case .running(let p) where p > 0: "Downloading… \(Int(p * 100))%"
+        case .waiting: "Waiting for Steam…"
+        case .running: "Downloading…"
+        case nil: "Download with Steam"
+        }
+    }
+
+    private var canDownload: Bool {
+        guard model.selectedWorkshopItem != nil else { return false }
+        if let download { return download.isReady && model.canOpenBackgroundDownload }
+        return !model.isBusy && model.backgroundDownload == nil
+    }
+
     /// Without Steam for Mac there's nothing to download with: the button gets Steam instead.
     private var footer: some View {
         VStack(spacing: 8) {
             if SteamDownload.isInstalled || model.isSnapshot {
-                Button("Download with Steam") { model.downloadSelectedWorkshopItem() }
+                Button(buttonTitle) { model.downloadSelectedWorkshopItem() }
                     .buttonStyle(PillButtonStyle(kind: .primary, height: 44, fullWidth: true))
-                    .disabled(model.selectedWorkshopItem == nil || model.isBusy)
+                    .disabled(!canDownload)
                     .keyboardShortcut(model.selectedWorkshopItem != nil && model.done == nil && !model.isPreviewingWallpaper ? .defaultAction : nil)
             } else {
                 Link(destination: SteamDownload.getSteamPage) {
@@ -173,6 +196,10 @@ struct WorkshopPanel: View {
             return "Downloading needs Steam for Mac and a Steam account that owns Wallpaper Engine."
         }
         guard let item = model.selectedWorkshopItem else { return "Pick a wallpaper above. Needs Wallpaper Engine on your Steam account." }
+        if let download { return download.isReady ? "Downloaded: trim it and pick an Aerial" : download.detail }
+        if let other = model.backgroundDownload {
+            return other.isReady ? "Open or discard “\(other.title)” first (top bar)" : "One download at a time: “\(other.title)” is still downloading"
+        }
         let size = item.size > 0 ? " (\(item.size.formatted(.byteCount(style: .file))))" : ""
         return "Steam downloads it\(size), then you trim it and pick an Aerial"
     }

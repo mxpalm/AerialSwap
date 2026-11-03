@@ -241,9 +241,9 @@ private struct DiscoverPanel: View {
 
     private var footer: some View {
         VStack(spacing: 8) {
-            Button("Use This Video") { model.downloadSelectedDiscover() }
+            Button(buttonTitle) { model.downloadSelectedDiscover() }
                 .buttonStyle(PillButtonStyle(kind: .primary, height: 44, fullWidth: true))
-                .disabled(model.selectedDiscoverVideo == nil || model.isBusy)
+                .disabled(!canUse)
                 .keyboardShortcut(model.selectedDiscoverVideo != nil && model.done == nil && !model.isPreviewingWallpaper ? .defaultAction : nil)
             Text(footerCaption).font(.system(size: 12)).foregroundStyle(Theme.secondary)
         }
@@ -251,8 +251,34 @@ private struct DiscoverPanel: View {
         .overlay(alignment: .top) { Rectangle().fill(.white.opacity(0.12)).frame(height: 1) }
     }
 
+    /// The selected video's own background download, if it has one.
+    private var download: BackgroundDownload? {
+        guard let video = model.selectedDiscoverVideo, let download = model.backgroundDownload,
+              download.key == "discover-\(video.id)" else { return nil }
+        return download
+    }
+
+    private var buttonTitle: String {
+        switch download?.state {
+        case .ready: "Open"
+        case .running(let p) where p > 0: "Downloading… \(Int(p * 100))%"
+        case .running, .waiting: "Downloading…"
+        case nil: "Use This Video"
+        }
+    }
+
+    private var canUse: Bool {
+        guard model.selectedDiscoverVideo != nil else { return false }
+        if let download { return download.isReady && model.canOpenBackgroundDownload }
+        return !model.isBusy && model.backgroundDownload == nil
+    }
+
     private var footerCaption: String {
         guard let video = model.selectedDiscoverVideo else { return "Pick a video above" }
+        if let download { return download.isReady ? "Downloaded: trim it and pick an Aerial" : download.detail }
+        if let other = model.backgroundDownload {
+            return other.isReady ? "Open or discard “\(other.title)” first (top bar)" : "One download at a time: “\(other.title)” is still downloading"
+        }
         let size = video.download.size.formatted(.byteCount(style: .file))
         return "Downloads \(size) (\(video.is4K ? "4K" : "1080p")), then you trim it and pick an Aerial"
     }

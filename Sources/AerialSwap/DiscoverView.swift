@@ -129,7 +129,6 @@ private struct DiscoverPanel: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 8) {
             DiscoverSourcePicker(model: model)
-            DiscoverOptionsMenu(model: model)
             Spacer()
             // Pixabay asks for a visible link wherever its results are shown.
             RenderableLink(destination: PixabayClient.homepage, flat: model.isSnapshot) {
@@ -161,30 +160,13 @@ private struct DiscoverPanel: View {
         .disabled(!model.pixabay.isAvailable)
     }
 
-    /// Topic chips; none is highlighted while a search is shown.
+    /// Topic chips and the options menu; none is highlighted while a search is shown.
     private var topics: some View {
-        FitOrScroll(.horizontal, flat: model.isSnapshot) {
-            HStack(spacing: 6) {
-                ForEach(DiscoverTopic.all) { topic in
-                    let isOn = model.discoverQuery.isEmpty && model.discoverTopic == topic
-                    Button { model.selectDiscoverTopic(topic) } label: {
-                        Text(topic.title)
-                            .font(.system(size: 12, weight: isOn ? .semibold : .regular))
-                            .fixedSize()
-                            .padding(.horizontal, 11)
-                            .frame(height: 26)
-                            .foregroundStyle(isOn ? Theme.ink : .white)
-                            .background(Capsule().fill(isOn ? Color.white : Color.white.opacity(0.1)))
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(isOn ? .isSelected : [])
-                }
-            }
+        TopicRow(model: model, topics: DiscoverTopic.all.map { TopicChoice(id: $0.id, title: $0.title) },
+                 selectedID: model.discoverQuery.isEmpty ? model.discoverTopic.id : nil,
+                 enabled: model.pixabay.isAvailable || model.isSnapshot) { id in
+            if let topic = DiscoverTopic.all.first(where: { $0.id == id }) { model.selectDiscoverTopic(topic) }
         }
-        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-        .clipped()
-        .disabled(!model.pixabay.isAvailable && !model.isSnapshot)
     }
 
     @ViewBuilder private var content: some View {

@@ -111,8 +111,7 @@ the path decoded first. Thumbnails load only over https.
 
 **Add Video → From Wallpaper Engine…** lists the video wallpapers the user's own Steam downloaded from the
 [Wallpaper Engine](https://www.wallpaperengine.io) Workshop, and opens the chosen one like a video you added
-(`WallpaperEngine.swift`). AerialSwap doesn't log in to Steam and downloads nothing: the user subscribes in Steam,
-and AerialSwap reads `steamapps/workshop/content/431960/<item>/` in
+(`WallpaperEngine.swift`). It reads `steamapps/workshop/content/431960/<item>/` in
 - the Windows Steam of Sevoflurane, CrossOver and Whisky bottles (`drive_c/Program Files (x86)/Steam`, plus the
   libraries in `libraryfolders.vdf`, with Windows drive letters resolved through the bottle's `dosdevices`);
 - Steam for Mac (`~/Library/Application Support/Steam`);
@@ -125,8 +124,7 @@ untrusted (anyone can upload to the Workshop): only `project.json` is parsed (at
 paths must stay inside the item's folder after resolving symlinks, titles are stripped of control characters and
 cut to 120 characters, and previews are decoded as small thumbnails. The file stays where Steam put it and is only
 read. The library credits "a Steam Workshop creator" and links the item's Workshop page (right-click → **View on
-Steam Workshop**). Downloading through Valve's `steamcmd` instead was ruled out for now: its macOS build is Intel-only
-and needs Rosetta, which macOS 28 drops for apps.
+Steam Workshop**).
 
 **Discover:** free videos from [Pixabay](https://pixabay.com/). Pick a topic (Featured, From Above, Mountains, …)
 or search, then pick a video to preview it full size (a smaller version, at least 1280 px wide, is streamed). **Use This Video** downloads
@@ -151,6 +149,51 @@ Pixabay's API terms ask for results to be cached for 24 hours: the proxy caches 
 `~/Library/Caches/AerialSwap/discover/` and reused for a day (older ones are deleted on launch, and shown only
 when Pixabay can't be reached). The limit is 100 requests per minute per key.
 
+**Discover → Workshop** browses Wallpaper Engine's video wallpapers and downloads one with the user's Steam for Mac.
+Unofficial: neither Valve nor Wallpaper Engine's developer offers this. Read [Steam Workshop downloads](#steam-workshop-downloads) under Known risks before changing it.
+
+**Search** (`WorkshopDiscover.swift`): Steam's `IPublishedFileService/QueryFiles`, which needs a Steam Web API key.
+Release builds ask the Discover proxy (`/workshop`, see `Proxy/README.md`), which holds the key as the `STEAM_KEY`
+secret; a key of one's own (`defaults write io.github.mxpalm.AerialSwap SteamKey <key>` or `STEAM_KEY`) asks Steam
+directly with the same parameters. The query is always app 431960 with the required tags `Video` and `Everyone`
+(the proxy forces both, whatever the app sends); a topic adds one tag. Search ranks by relevance (query type 12),
+Trending is this month's most popular (3, 30 days), a topic its tag's best rated (0). Previews load only from
+Steam's image hosts over https. The keyless `ISteamRemoteStorage/GetPublishedFileDetails` doesn't help: it can't
+search, and its `file_url` is empty for Wallpaper Engine items.
+
+**Download with Steam** (`SteamDownload.swift`): the user's own Steam for Mac downloads the item, the way Wallpaper
+Engine itself asks Steam for a subscribed wallpaper. AerialSwap never sees the Steam login and doesn't download
+anything from Steam itself.
+1. The first time, an alert explains it (`SteamDownloadConfirmed` default once agreed).
+2. If Steam already has the item (any library above), that copy is used and Steam isn't asked.
+3. The limits and the remote switch below are checked; the download is counted (`SteamDownloadTimes`).
+4. Steam is started hidden and without focus if it isn't running.
+5. AerialSwap starts itself again as a child process: `AerialSwap --steam-download <id>` with `SteamAppId` and
+   `SteamGameId` set to 431960. Steamworks binds a process to one app ID for its lifetime, so the app itself never
+   loads Steamworks; while the child runs, Steam shows the user as playing Wallpaper Engine.
+6. The child `dlopen`s **Steam's own** `libsteam_api.dylib` (`Steam.AppBundle/Steam/Contents/MacOS/Frameworks/Steam
+   Helper.app/Contents/MacOS/`, else the first one found in `Steam.AppBundle`, at most 50,000 entries searched). It's
+   loaded only if its signature is valid for Valve's Developer ID (`anchor apple generic and certificate
+   leaf[subject.OU] = "MXGJJ98X76"`). AerialSwap ships no Valve code.
+7. `SteamAPI_InitFlat` (waits up to 90 s for Steam to start and log in), then `ISteamApps::BIsSubscribed`: if the
+   account doesn't own Wallpaper Engine, it stops before asking for anything. The interface versions
+   (`SteamApps_v0NN`, `SteamUGC_v0NN`) are looked up newest first, so a Steam update doesn't break it at once.
+8. `ISteamUGC::DownloadItem(id, highPriority)`, then `GetItemState` / `GetItemDownloadInfo` every half second.
+   The child prints `PROGRESS <done> <total>`, then `FOLDER <path>` once the state is Installed (4) without
+   NeedsUpdate, Downloading or DownloadPending (8, 16, 32), or `ERROR <message>`. It gives up after 3 minutes without
+   progress or an hour in all. **Cancel** ends the child (Steam may still finish the download).
+9. The folder must be `…/workshop/content/431960/<id>`. It's then read like any downloaded item; one that isn't a
+   video, or isn't rated Everyone in its `project.json`, is refused (Steam keeps its copy).
+
+`DownloadItem` doesn't subscribe the account: the item doesn't show up in the user's Workshop subscriptions, and
+Steam may remove it when it cleans up. AerialSwap's library keeps its own converted copy.
+
+**Alternatives that were ruled out:** Valve's `steamcmd` (Intel-only on macOS, needs Rosetta, which macOS 28 drops
+for apps; and it needs the user's password in a second client); DepotDownloader-style clients (they log in with the
+user's password, outside Steam); scripting Steam's console or its CEF debugging port (unsupported, and it changes
+with every Steam update); and downloading the file directly (Workshop items of Wallpaper Engine have no public file
+URL).
+
 Headless helpers (`--list`, `--transcode` and `--snapshot` never touch the aerials folder):
 
 ```sh
@@ -160,6 +203,7 @@ AerialSwap.app/Contents/MacOS/AerialSwap --snapshot outDir [TestFootage]   # ren
 AerialSwap.app/Contents/MacOS/AerialSwap --sync-group     # brings the AerialSwap group in line with the library
 AerialSwap.app/Contents/MacOS/AerialSwap --remove-group   # removes the group and its LaunchAgent, puts Apple's manifest back
 AerialSwap.app/Contents/MacOS/AerialSwap --install-update <zip URL> <signature URL>   # Updater on this copy, no relaunch
+SteamAppId=431960 AerialSwap.app/Contents/MacOS/AerialSwap --steam-download <id>   # the download child alone: skips the limits and switch, for debugging
 ```
 
 ## How it works (findings from macOS 27.0.1)
@@ -234,6 +278,8 @@ frame (e.g. 60–120 s): any unlock during the hold leaves that frame on the des
 | `~/Library/Application Support/AerialSwap/Index.plist.before-change` | `Store/Index.plist` as it was before the last desktop / screen saver switch |
 | `~/Library/Logs/AerialSwap.log` | Log |
 | `~/Library/Caches/AerialSwap/discover/` | Pixabay search results, kept 24 h |
+| `~/Library/Application Support/Steam/steamapps/workshop/content/431960/` | Steam's Workshop downloads (Download with Steam puts them there); only read |
+| `io.github.mxpalm.AerialSwap` defaults `SteamKey`, `SteamDownloadConfirmed`, `SteamDownloadTimes` | Own Steam Web API key, consent to Download with Steam, start times of the last day's downloads (for the limits) |
 | `~/Library/Application Support/AerialSwap/tools/` | yt-dlp, deno, ffmpeg when installed without Homebrew |
 
 AerialSwap writes its own folders, `entries.json`, and its own videos and thumbnails tagged with
@@ -294,6 +340,42 @@ killall WallpaperAerialsExtension WallpaperAgent
   structure but is untested on the desktop.
 - ffmpeg conversion is an extra lossy step (HEVC at 80 Mbps, hardly visible) and drops audio.
   ffmpeg is only used when you agree to it and is never bundled.
+
+### Steam Workshop downloads
+
+Download with Steam (above) is the one feature that acts on a third-party account. As of November 2026:
+
+- **Ban risk: low, not zero.** Wallpaper Engine has no anti-cheat (VAC) and no online play. AerialSwap uses the
+  official Steam client and Steamworks API, only for an app the account owns, the same calls Wallpaper Engine
+  makes. Tools that use Steamworks the same way under other app IDs (Steam Achievement Manager, Idle Master)
+  have been used for years without widely reported bans. Still, Valve's
+  [Subscriber Agreement](https://store.steampowered.com/subscriber_agreement/) doesn't allow this use explicitly,
+  so Valve could act at any time (a warning, a Workshop or community ban, in the worst case the account).
+- **More likely problems:** a Steam update changes `libsteam_api.dylib`, its place or interface versions (then the
+  download fails with an error; installed wallpapers keep working); Valve or Wallpaper Engine's developer objects;
+  Valve limits Workshop downloads to the app itself. Workshop wallpapers belong to their creators: personal use only, never redistributed.
+- **What keeps it to normal use** (all in the app, `SteamDownload.swift` and `AppModel.startSteamDownload`):
+  - Ownership check (`BIsSubscribed`) before any request.
+  - Items Steam already has are reused, not downloaded again.
+  - At most 1 download every 30 s, 10 an hour, 30 a day (per Mac, `SteamDownloadTimes`).
+  - Only `Video` items rated `Everyone`, both in the search (forced by the proxy) and in the downloaded `project.json`.
+  - One download at a time, with Cancel; the child quits when it's done.
+  - A consent alert says it's unofficial before the first download.
+  - Steam's own, Valve-signed library is used; nothing of Valve's is shipped, patched or injected.
+- **Remote switch:** the app asks the proxy's `/workshop-status` before each download (5 s timeout). If it says
+  `{"downloads": false}`, the download stops with "Downloading Workshop wallpapers with Steam is paused for now". When the proxy
+  can't be reached, downloads stay on (fail open). To pause them for everyone, without an app update: set
+  `WORKSHOP_DOWNLOADS = "off"` in `Proxy/wrangler.toml` and run `npx wrangler deploy` in `Proxy/` (`"on"` and
+  deploy again to resume). Do this right away if Valve or Wallpaper Engine's developer asks, then remove or change
+  the feature in the next release. Searching keeps working; to stop it too, delete the `STEAM_KEY` secret.
+- **Signing:** builds are ad-hoc signed, which lets the child `dlopen` Valve's library. A Developer ID build with
+  the hardened runtime (`SIGN_IDENTITY`) blocks loading a library of another team: it then needs the
+  `com.apple.security.cs.disable-library-validation` entitlement, or downloads fail with "Steam's library couldn't
+  be loaded."
+- **Steam Web API key:** the proxy's `STEAM_KEY` belongs to the Steam account that created it. Valve's
+  [Web API terms](https://steamcommunity.com/dev/apiterms) allow 100,000 calls a day; the proxy caches each search
+  for an hour and limits each IP, so that's not reached. A leaked or revoked key only breaks search: replace it with
+  `npx wrangler secret put STEAM_KEY`. Never commit or print it.
 
 ## Releases and updates
 

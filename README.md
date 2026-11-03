@@ -34,7 +34,7 @@ Aerials stay untouched.
 
 You need a Mac with Apple Silicon (M1 or later) and macOS 27.
 
-1. **Download** `AerialSwap-1.1.zip` from the [latest release](https://github.com/mxpalm/AerialSwap/releases/latest)
+1. **Download** `AerialSwap-2.0.zip` from the [latest release](https://github.com/mxpalm/AerialSwap/releases/latest)
    and double-click it to unzip.
 2. **Move** `AerialSwap` into your **Applications** folder.
 3. **Open it.** The first time, macOS shows a warning, because AerialSwap is a free app from an independent
@@ -58,7 +58,9 @@ board or a channel, switch the dialog to **Playlist or Board**: you see its vide
 Own [Wallpaper Engine](https://www.wallpaperengine.io) on Steam? Under **Discover → Workshop** you can browse its
 video wallpapers and click **Download with Steam**: your own Steam for Mac downloads it, no Windows needed.
 **Add Video → From Wallpaper Engine…** shows the video wallpapers your Steam already downloaded (also from CrossOver
-or Whisky). AerialSwap never sees your Steam login, and it can't use scene or web wallpapers.
+or Whisky). AerialSwap never sees your Steam login, and it can't use scene or web wallpapers. Once a wallpaper is in
+your library, AerialSwap removes the copy Steam downloaded for it (turn this off in Discover's menu); wallpapers you
+subscribed to in the Workshop yourself are never touched.
 
 Downloading this way isn't an official Wallpaper Engine or Steam feature: AerialSwap asks your Steam app the way
 Wallpaper Engine itself does, and Steam shows you as playing Wallpaper Engine meanwhile. To keep it to normal use,
@@ -110,6 +112,8 @@ Click on the video itself to hide the library and see the wallpaper the way your
 Click **Discover** at the top to browse thousands of free, high-quality videos from [Pixabay](https://pixabay.com).
 Pick a topic or search for anything, click a video to preview it, then **Use This Video**. AerialSwap downloads it
 in 4K in the background (keep browsing meanwhile; the top bar shows the progress) and takes you to step 2.
+The menu at the end of the topics sorts (Popular, Newest) and filters (resolution, Pixabay's categories, hide videos
+already in your library); videos you already have say **In Library**.
 
 ## Questions
 

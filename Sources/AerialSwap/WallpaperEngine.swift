@@ -72,6 +72,12 @@ enum WallpaperEngine {
         return nil
     }
 
+    /// The item's video when Steam has already downloaded it (in any library found), so it isn't asked again.
+    static func downloadedVideo(id: String) -> WorkshopVideo? {
+        guard SteamDownload.isValidID(id) else { return nil }
+        return contentFolders().lazy.compactMap { video(in: $0.1.appending(path: id)) }.first
+    }
+
     /// A small preview image, decoded as a thumbnail so a huge or malformed picture can't use much memory.
     static func thumbnail(_ url: URL, maxPixels: Int = 480) -> NSImage? {
         guard (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map({ $0 < 50 << 20 }) == true,

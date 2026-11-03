@@ -18,3 +18,7 @@ namespace_id = "1001"
   [ratelimits.simple]
   limit = 30
   period = 60
+
+# Steam downloads of Workshop wallpapers in the app: "off" pauses them for everyone (then npx wrangler deploy).
+[vars]
+WORKSHOP_DOWNLOADS = "on"

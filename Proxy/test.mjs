@@ -80,4 +80,8 @@ await get(env, "/workshop?tag=%3Cscript%3E");
 assert.equal(upstreamCalls.at(-1).searchParams.get("requiredtags[2]"), null);
 assert.equal((await get(makeEnv(), "/workshop")).status, 500);
 
+// The download switch: on unless WORKSHOP_DOWNLOADS is "off".
+assert.deepEqual(await (await get(makeEnv(), "/workshop-status")).json(), { downloads: true });
+assert.deepEqual(await (await get({ ...makeEnv(), WORKSHOP_DOWNLOADS: "off" }, "/workshop-status")).json(), { downloads: false });
+
 console.log("proxy tests passed");

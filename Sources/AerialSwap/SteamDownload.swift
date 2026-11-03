@@ -62,6 +62,49 @@ enum SteamDownload {
         return SecStaticCodeCheckValidity(code, SecCSFlags(rawValue: kSecCSCheckAllArchitectures), requirement) == errSecSuccess
     }
 
+    // MARK: - Keeping it gentle
+
+    /// At most one download every 30 s, 10 an hour and 30 a day: what a person picking wallpapers does, never a bulk
+    /// download. Returns why not, or nil when a download may start.
+    static func limitReason(now: Date = .now) -> String? {
+        let times = recentDownloads(now: now)
+        if let last = times.max(), now.timeIntervalSince(last) < 30 {
+            return "Wait \(Int(30 - now.timeIntervalSince(last)) + 1) seconds before the next Steam download."
+        }
+        if times.filter({ now.timeIntervalSince($0) < 3600 }).count >= 10 {
+            return "That's 10 Steam downloads this hour. AerialSwap keeps it at that, so Steam sees normal use. Try again later."
+        }
+        if times.count >= 30 { return "That's 30 Steam downloads today. AerialSwap keeps it at that. Try again tomorrow." }
+        return nil
+    }
+
+    static func recordDownload(now: Date = .now) {
+        UserDefaults.standard.set((recentDownloads(now: now) + [now]).map(\.timeIntervalSince1970), forKey: downloadTimesKey)
+    }
+
+    private static let downloadTimesKey = "SteamDownloadTimes"
+
+    /// Download start times of the last 24 hours.
+    private static func recentDownloads(now: Date) -> [Date] {
+        (UserDefaults.standard.array(forKey: downloadTimesKey) as? [Double] ?? [])
+            .map(Date.init(timeIntervalSince1970:))
+            .filter { now.timeIntervalSince($0) < 86_400 && $0 <= now }
+    }
+
+    /// The Discover proxy can switch Steam downloads off for everyone (`WORKSHOP_DOWNLOADS = "off"`), e.g. if Valve or
+    /// Wallpaper Engine's developer object, without an app update. Nothing about the user is sent. When the proxy can't
+    /// be reached, downloads stay on.
+    static func downloadsAllowed(proxy: URL?) async -> Bool {
+        guard let proxy else { return true }
+        var request = URLRequest(url: proxy.appending(path: "workshop-status"), timeoutInterval: 5)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let status = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              let allowed = status["downloads"] as? Bool else { return true }
+        return allowed
+    }
+
     /// A Workshop ID: digits only.
     static func isValidID(_ id: String) -> Bool { !id.isEmpty && id.count <= 20 && id.allSatisfy(\.isASCII) && id.allSatisfy(\.isNumber) }
 
@@ -95,7 +138,11 @@ enum SteamDownload {
               // The interface's version changes with Steam's SDK (v020, v021, …): the newest one this copy has.
               let ugcAccessor = (14...40).reversed().lazy
                 .compactMap({ symbol(String(format: "SteamAPI_SteamUGC_v%03d", $0), as: (@convention(c) () -> OpaquePointer?).self) })
-                .first
+                .first,
+              let appsAccessor = (5...20).reversed().lazy
+                .compactMap({ symbol(String(format: "SteamAPI_SteamApps_v%03d", $0), as: (@convention(c) () -> OpaquePointer?).self) })
+                .first,
+              let isSubscribed = symbol("SteamAPI_ISteamApps_BIsSubscribed", as: (@convention(c) (OpaquePointer) -> Bool).self)
         else { emit("ERROR This version of Steam isn't supported yet."); return 1 }
 
         // Steam may still be starting (SteamDownloader launches it): wait up to 90 s for it.
@@ -111,6 +158,11 @@ enum SteamDownload {
             Thread.sleep(forTimeInterval: 1)
         }
         defer { shutdown() }
+        // Nothing is asked of the Workshop for an account that doesn't own Wallpaper Engine.
+        guard let apps = appsAccessor(), isSubscribed(apps) else {
+            emit("ERROR This Steam account doesn't own Wallpaper Engine, so Steam can't download its wallpapers.")
+            return 1
+        }
         guard let ugc = ugcAccessor() else { emit("ERROR Steam's Workshop isn't available."); return 1 }
         guard downloadItem(ugc, id, true) else {
             emit("ERROR Steam didn't accept the download. Does this Steam account own Wallpaper Engine?")
@@ -157,6 +209,8 @@ enum SteamDownloadError: LocalizedError {
     case notInstalled
     case failed(String)
     case notAVideo
+    case notForEveryone
+    case paused
     case cancelled
 
     var errorDescription: String? {
@@ -164,6 +218,8 @@ enum SteamDownloadError: LocalizedError {
         case .notInstalled: "Downloading Workshop wallpapers needs Steam for Mac, logged in to an account that owns Wallpaper Engine."
         case .failed(let message): message
         case .notAVideo: "Steam downloaded it, but it isn't a video wallpaper AerialSwap can use."
+        case .notForEveryone: "This wallpaper isn't rated for everyone, so AerialSwap doesn't use it."
+        case .paused: "Downloading Workshop wallpapers with Steam is paused for now. Try again in a few days."
         case .cancelled: "Download cancelled."
         }
     }

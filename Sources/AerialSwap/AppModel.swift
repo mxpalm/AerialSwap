@@ -675,6 +675,14 @@ final class AppModel {
     /// The user's Steam downloads the item; then it opens like a video from the Wallpaper Engine dialog.
     private func startSteamDownload(_ item: WorkshopItem) {
         guard !isBusy else { return }
+        // Already downloaded: used as it is, Steam isn't asked.
+        if let video = WallpaperEngine.downloadedVideo(id: item.id) {
+            guard video.rating == nil else { fail(SteamDownloadError.notForEveryone); return }
+            Log.info("Steam: Workshop item \(item.id) is already downloaded")
+            useWorkshopVideo(video)
+            return
+        }
+        if let reason = SteamDownload.limitReason() { notice = Notice(kind: .info, text: reason); return }
         pauseBackgroundVideo(in: .discover)
         let downloader = SteamDownloader()
         steamDownloader = downloader
@@ -685,12 +693,16 @@ final class AppModel {
             + "Meanwhile Steam shows you as playing Wallpaper Engine. Then you can trim it and set it as your wallpaper."
         startProgress("Downloading with Steam", flow: .download, step: .download)
 
+        let proxy = workshop.proxy
         Task.detached {
             do {
+                guard await SteamDownload.downloadsAllowed(proxy: proxy) else { throw SteamDownloadError.paused }
+                SteamDownload.recordDownload()
                 let folder = try await downloader.run(id: item.id) { p in
                     Task { @MainActor in self.progress = p }
                 }
                 guard let video = WallpaperEngine.video(in: folder) else { throw SteamDownloadError.notAVideo }
+                guard video.rating == nil else { throw SteamDownloadError.notForEveryone }
                 await MainActor.run {
                     self.stopProgress()
                     self.useWorkshopVideo(video)

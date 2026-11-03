@@ -27,6 +27,10 @@ export default {
     const url = new URL(request.url);
     if (request.method !== "GET") return error(405, "Only GET is supported.");
     if (url.pathname === "/workshop") return workshop(url, request, env, ctx);
+    // Whether the app may download Workshop items with the user's Steam: WORKSHOP_DOWNLOADS = "off" pauses them.
+    if (url.pathname === "/workshop-status") {
+      return json(JSON.stringify({ downloads: env.WORKSHOP_DOWNLOADS !== "off" }), 200, "NONE");
+    }
     if (url.pathname !== "/videos") return error(404, "Not found.");
     if (!env.PIXABAY_KEY) return error(500, "The proxy has no Pixabay key.");
 

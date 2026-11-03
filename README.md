@@ -55,9 +55,15 @@ Drag a video file anywhere onto the AerialSwap window, or click **Add Video**. Y
 link (**Add Video → From URL…**), or find a free one under **Discover** (see below). For a playlist, a Pinterest
 board or a channel, switch the dialog to **Playlist or Board**: you see its videos and pick one.
 
-Using [Wallpaper Engine](https://www.wallpaperengine.io) through Steam (for example with CrossOver or Whisky)?
-**Add Video → From Wallpaper Engine…** shows the video wallpapers you subscribed to on its Workshop. AerialSwap
-doesn't sign in to Steam or download anything itself, and it can't use scene or web wallpapers.
+Own [Wallpaper Engine](https://www.wallpaperengine.io) on Steam? Under **Discover → Workshop** you can browse its
+video wallpapers and click **Download with Steam**: your own Steam for Mac downloads it, no Windows needed.
+**Add Video → From Wallpaper Engine…** shows the video wallpapers your Steam already downloaded (also from CrossOver
+or Whisky). AerialSwap never sees your Steam login, and it can't use scene or web wallpapers.
+
+Downloading this way isn't an official Wallpaper Engine or Steam feature: AerialSwap asks your Steam app the way
+Wallpaper Engine itself does, and Steam shows you as playing Wallpaper Engine meanwhile. To keep it to normal use,
+AerialSwap checks that your account owns Wallpaper Engine, reuses wallpapers Steam already downloaded, and allows at
+most 10 downloads an hour and 30 a day. You use it at your own risk.
 
 Any length works. Videos in 4K, filmed in landscape (wider than tall) with slow camera movement, look best.
 

@@ -158,7 +158,11 @@ secret; a key of one's own (`defaults write io.github.mxpalm.AerialSwap SteamKey
 directly with the same parameters. The query is always app 431960 with the required tags `Video` and `Everyone`
 (the proxy forces both, whatever the app sends); a topic adds one tag. Search ranks by relevance (query type 12),
 Trending is this month's most popular (3, 30 days), a topic its tag's best rated (0). Previews load only from
-Steam's image hosts over https. The keyless `ISteamRemoteStorage/GetPublishedFileDetails` doesn't help: it can't
+Steam's image hosts over https. There's no video to stream before downloading: the tiles play the creator's
+preview where it's an animated GIF (about half the video items; square, 160-256 px, at most 1 MB, like in Wallpaper
+Engine's own browser; still with Reduce Motion), and the window shows the preview blurred when it's smaller than
+1000 px. About 9% of items also have a YouTube preview (`previews` with `preview_type` 1, returned through the
+proxy's `return_previews=1`); AerialSwap doesn't use those. The keyless `ISteamRemoteStorage/GetPublishedFileDetails` doesn't help: it can't
 search, and its `file_url` is empty for Wallpaper Engine items.
 
 **Download with Steam** (`SteamDownload.swift`): the user's own Steam for Mac downloads the item, the way Wallpaper

@@ -73,6 +73,7 @@ assert.equal(steam.searchParams.get("query_type"), "3");
 assert.equal(steam.searchParams.get("requiredtags[0]"), "Video");
 assert.equal(steam.searchParams.get("requiredtags[1]"), "Everyone");
 assert.equal(steam.searchParams.get("requiredtags[2]"), "Nature");
+assert.equal(steam.searchParams.get("return_previews"), "1");
 assert.ok(!(await r.text()).includes("STEAMSECRET"));
 assert.equal((await get(env, "/workshop?numperpage=500&tag=Nature&query_type=99&search_text=ocean")).headers.get("X-Proxy-Cache"), "HIT");
 // A tag with odd characters is ignored; without a Steam key the route refuses.

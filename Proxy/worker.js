@@ -86,7 +86,7 @@ async function workshop(url, request, env, ctx) {
   if (tag && /^[A-Za-z0-9 &'-]{1,30}$/.test(tag)) tags.push(tag);
   tags.forEach((t, i) => query.set(`requiredtags[${i}]`, t));
   query.sort();
-  const cacheKey = `workshop?${query}`;
+  const cacheKey = `workshop-previews?${query}`;   // answers with previews (YouTube ids); older entries had none
 
   const cached = await env.CACHE?.get(cacheKey);
   if (cached) return json(cached, 200, "HIT");
@@ -99,6 +99,7 @@ async function workshop(url, request, env, ctx) {
   query.set("appid", WORKSHOP_APP);
   query.set("match_all_tags", "1");
   query.set("return_tags", "1");
+  query.set("return_previews", "1");   // extra previews: screenshots and YouTube videos
   query.set("key", env.STEAM_KEY);
   const upstream = await fetch(`${STEAM}?${query}`);
   if (upstream.status === 429) return error(429, "Steam is busy. Try again in a minute.");

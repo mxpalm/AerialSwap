@@ -186,7 +186,7 @@ private struct WorkshopTile: View {
         Button { model.selectWorkshopItem(item) } label: {
             VStack(alignment: .leading, spacing: 5) {
                 ZStack {
-                    Thumb(image: model.workshopItemThumbnails[item.id], cornerRadius: 9)
+                    Thumb(image: model.workshopItemThumbnails[item.id], cornerRadius: 9, animates: !model.isSnapshot)
                     if let resolution = item.resolutionText {
                         badge(resolution).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     }

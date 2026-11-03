@@ -50,13 +50,13 @@ enum WallpaperEngine {
 
     static func scan() -> WorkshopScan {
         var scan = WorkshopScan()
-        var seen = Set<String>()   // the same download can be reachable through two library paths
+        var seen = Set<String>()   // item IDs: the same item can be in two Steam installs or library paths
         for (label, content) in contentFolders() {
             scan.sources.append(label)
             for folder in subdirectories(of: content).prefix(maxItemsPerSource) {
                 switch item(at: folder, source: label) {
                 case .video(let video):
-                    if seen.insert(video.video.resolvingSymlinksInPath().path).inserted { scan.videos.append(video) }
+                    if seen.insert(video.id).inserted { scan.videos.append(video) }
                 case .other: scan.skipped += 1
                 case .none: break
                 }

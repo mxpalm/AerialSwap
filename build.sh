@@ -70,7 +70,9 @@ PLIST
 
 # No sandbox entitlements (needs access to ~/Library/Application Support/com.apple.wallpaper).
 if [[ -n "${SIGN_IDENTITY:-}" ]]; then
-    codesign --force --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP"
+    # Hardened runtime: library validation would refuse Steam's libsteam_api.dylib (Valve's team) in the
+    # --steam-download child, which checks its Valve signature itself before loading it.
+    codesign --force --options runtime --timestamp --entitlements Resources/AerialSwap.entitlements --sign "$SIGN_IDENTITY" "$APP"
 else
     codesign --force --sign - "$APP"   # ad-hoc
 fi

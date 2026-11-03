@@ -95,7 +95,8 @@ struct WorkshopClient: Sendable {
             let tags = ["Video", "Everyone"] + (topic.tag.map { [$0] } ?? [])
             components.queryItems = items + tags.enumerated().map { URLQueryItem(name: "requiredtags[\($0.offset)]", value: $0.element) } + [
                 URLQueryItem(name: "appid", value: SteamDownload.appID), URLQueryItem(name: "match_all_tags", value: "1"),
-                URLQueryItem(name: "return_tags", value: "1"), URLQueryItem(name: "key", value: key),
+                URLQueryItem(name: "return_tags", value: "1"), URLQueryItem(name: "return_previews", value: "1"),
+                URLQueryItem(name: "key", value: key),
             ]
         } else if let proxy, let viaProxy = URLComponents(url: proxy.appending(path: "workshop"), resolvingAgainstBaseURL: false) {
             components = viaProxy

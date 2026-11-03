@@ -176,7 +176,8 @@ Engine itself asks Steam for a subscribed wallpaper. AerialSwap never sees the S
 anything from Steam itself.
 1. The first time, an alert explains it (`SteamDownloadConfirmed` default once agreed).
 2. If Steam already has the item (any library above), that copy is used and Steam isn't asked.
-3. The limits and the remote switch below are checked; the download is counted (`SteamDownloadTimes`).
+3. The limits and the remote switch below are checked. A download counts (`SteamDownloadTimes`) once Steam accepted it
+   (step 8), so attempts that fail earlier (Steam not logged in, Wallpaper Engine not owned) don't.
 4. Steam is started hidden and without focus if it isn't running.
 5. AerialSwap starts itself again as a child process: `AerialSwap --steam-download <id>` with `SteamAppId` and
    `SteamGameId` set to 431960. Steamworks binds a process to one app ID for its lifetime, so the app itself never
@@ -189,9 +190,10 @@ anything from Steam itself.
    account doesn't own Wallpaper Engine, it stops before asking for anything. The interface versions
    (`SteamApps_v0NN`, `SteamUGC_v0NN`) are looked up newest first, so a Steam update doesn't break it at once.
 8. `ISteamUGC::DownloadItem(id, highPriority)`, then `GetItemState` / `GetItemDownloadInfo` every half second.
-   The child prints `PROGRESS <done> <total>`, then `FOLDER <path>` once the state is Installed (4) without
-   NeedsUpdate, Downloading or DownloadPending (8, 16, 32), or `ERROR <message>`. It gives up after 3 minutes without
-   progress or an hour in all. **Cancel** ends the child (Steam may still finish the download).
+   The child prints `STARTED` once `DownloadItem` accepted it, `PROGRESS <done> <total>`, then `FOLDER <path>` once
+   the state is Installed (4) without NeedsUpdate, Downloading or DownloadPending (8, 16, 32), or `ERROR <message>`.
+   It gives up after 3 minutes without progress (waiting in Steam's queue doesn't count as a stall) or an hour in
+   all. The app reads the child's output to the end (at most 2 s after it exits) before looking for `FOLDER`. **Cancel** ends the child (Steam may still finish the download).
 9. The folder must be `…/workshop/content/431960/<id>`. It's then read like any downloaded item; one that isn't a
    video, or isn't rated Everyone in its `project.json`, is refused (Steam keeps its copy).
 
@@ -379,9 +381,9 @@ Download with Steam (above) is the one feature that acts on a third-party accoun
   deploy again to resume). Do this right away if Valve or Wallpaper Engine's developer asks, then remove or change
   the feature in the next release. Searching keeps working; to stop it too, delete the `STEAM_KEY` secret.
 - **Signing:** builds are ad-hoc signed, which lets the child `dlopen` Valve's library. A Developer ID build with
-  the hardened runtime (`SIGN_IDENTITY`) blocks loading a library of another team: it then needs the
-  `com.apple.security.cs.disable-library-validation` entitlement, or downloads fail with "Steam's library couldn't
-  be loaded."
+  the hardened runtime (`SIGN_IDENTITY`) would block loading a library of another team, so build.sh signs it with
+  `Resources/AerialSwap.entitlements` (`com.apple.security.cs.disable-library-validation`). That allows loading any
+  signed library; AerialSwap only `dlopen`s the one whose Valve signature it checked itself.
 - **Steam Web API key:** the proxy's `STEAM_KEY` belongs to the Steam account that created it. Valve's
   [Web API terms](https://steamcommunity.com/dev/apiterms) allow 100,000 calls a day; the proxy caches each search
   for an hour and limits each IP, so that's not reached. A leaked or revoked key only breaks search: replace it with

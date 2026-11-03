@@ -150,8 +150,8 @@ final class AppModel {
     /// Opens the finished download like a video the user added (set when it's ready).
     @ObservationIgnored private var openFinishedDownload: (() -> Void)?
     @ObservationIgnored private var discardFinishedDownload: (() -> Void)?   // the chip's ✕ on a finished download
-    /// The Workshop folder Steam downloaded for the loaded video, removed once it's saved (Remove Steam's Copy option).
-    /// Only set for downloads AerialSwap asked for: items Steam already had (e.g. subscribed ones) are left alone.
+    /// The Workshop folder Steam for Mac has the loaded video in, removed once it's saved (Remove Steam's Copy option).
+    /// removeCopy leaves subscribed items alone (Steam would download them again).
     @ObservationIgnored private var steamCopyToRemove: URL?
     /// Set while the loaded source is a Pixabay or Workshop video, so the library keeps the credit and its page.
     @ObservationIgnored private var sourceCredit: (credit: String, page: String?)?
@@ -949,6 +949,8 @@ final class AppModel {
                 guard video.rating == nil else { fail(SteamDownloadError.notForEveryone); return }
                 Log.info("Steam: Workshop item \(item.id) is already downloaded")
                 useWorkshopVideo(video, credit: item.credit)
+                // E.g. one AerialSwap downloaded earlier: removeCopy still keeps subscribed ones and other Steam installs'.
+                steamCopyToRemove = SteamDownload.itemFolder(item.id, containing: video.video)
             } else {
                 downloadWithSteam(item)
             }

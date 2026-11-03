@@ -234,9 +234,10 @@ anything from Steam itself.
 9. The folder must be `…/workshop/content/431960/<id>`. It's then read like any downloaded item; one that isn't a
    video, or isn't rated Everyone in its `project.json`, is refused (Steam keeps its copy).
 10. Once the video is saved to the library, **Remove Steam's Copy After Saving** (options menu, Workshop only, on by
-    default, `DiscoverOptions.removeSteamCopy`) deletes the item's folder (`SteamDownload.removeCopy`). Only for items
-    this download asked Steam for (not ones Steam already had, step 2), only a `…/workshop/content/431960/<id>` folder,
-    and only when `appworkshop_431960.acf` lists the item without `subscribedby`. Steam syncs the account's
+    default, `DiscoverOptions.removeSteamCopy`) deletes the item's folder (`SteamDownload.removeCopy`), also when Steam
+    already had it (step 2), e.g. from an earlier AerialSwap download. Only in Steam for Mac's own library (not a
+    Windows Steam in CrossOver or other bottles, `SteamDownload.itemFolder`), only a `…/workshop/content/431960/<id>`
+    folder, and only when `appworkshop_431960.acf` lists the item without `subscribedby`. Steam syncs the account's
     subscriptions (e.g. made on Windows) to the Mac and would download those again; when the entry is missing, the
     copy is kept. Tested (macOS 27.2, November 2026): Steam doesn't bring a removed item back by itself, and a later
     Download with Steam downloads it again instead of reporting the missing folder as installed.

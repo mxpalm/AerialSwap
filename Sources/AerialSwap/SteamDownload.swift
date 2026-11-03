@@ -112,6 +112,14 @@ enum SteamDownload {
     }
 
     /// A Workshop ID: digits only.
+    /// The item's folder in Steam for Mac's own library when `file` is in it; nil for other libraries (e.g. a Windows
+    /// Steam in CrossOver, whose Wallpaper Engine may use it).
+    static func itemFolder(_ id: String, containing file: URL) -> URL? {
+        let folder = steamRoot.appending(path: "steamapps/workshop/content/\(appID)/\(id)")
+        let path = file.standardizedFileURL.resolvingSymlinksInPath().path
+        return isValidID(id) && path.hasPrefix(folder.resolvingSymlinksInPath().path + "/") ? folder : nil
+    }
+
     /// Deletes the folder Steam downloaded an item into, once the video is in the library. Only a Workshop item folder
     /// (`…/workshop/content/431960/<id>`) that the account isn't subscribed to: Steam keeps subscribed items in sync
     /// (e.g. ones subscribed on Windows) and would download them again. Steam doesn't bring a removed item back by

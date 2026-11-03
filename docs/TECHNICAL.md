@@ -138,6 +138,12 @@ or by date with query type 1), and **4K Only** (Pixabay `min_width=3840`; Worksh
 Tiles of videos already in the library (matched by their page, `sourcePage`) say **In Library**; Workshop items that
 Steam already downloaded say **In Steam** (adding those is instant and doesn't count as a download).
 
+Downloads from both sources run in the background (`BackgroundDownload`, one at a time): a chip in the top bar shows
+the progress (or "Waiting for Steam") and cancels it with ✕, and the user keeps browsing Library and Discover meanwhile.
+The tile says **Downloading**, then **Downloaded**. A finished download opens right away when its tile is still the
+selected one and nothing else is running; otherwise the chip (or the tile's button, now **Open**) opens it once the
+user is back on Home with nothing running. ✕ on a finished Pixabay download deletes the temp file; Steam's copy stays.
+
 Discover needs a Pixabay API key (free at [pixabay.com/api/docs](https://pixabay.com/api/docs/)). Release builds
 don't contain one: they search through the Discover proxy, a small Cloudflare Worker that adds the key
 (see [`Proxy/README.md`](../Proxy/README.md); its address goes in `Resources/discover-proxy.url`). A key of your

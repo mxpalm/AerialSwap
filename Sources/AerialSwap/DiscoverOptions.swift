@@ -51,6 +51,20 @@ enum DiscoverResolution: String, Codable, CaseIterable, Sendable {
     }
 }
 
+/// Workshop, sorted by Popular: most popular over this time (Steam's trend ranking, `days`). nil (Any Time): the
+/// topic's own ranking (Trending: this month's trend; tags: all-time votes; searches: relevance).
+enum DiscoverPeriod: Int, Codable, CaseIterable, Sendable {
+    case week = 7, month = 30, year = 365
+
+    var title: String {
+        switch self {
+        case .week: "This Week"
+        case .month: "This Month"
+        case .year: "This Year"
+        }
+    }
+}
+
 /// Pixabay's own categories (its `category` parameter), the ones that make wallpapers.
 enum PixabayCategory: String, Codable, CaseIterable, Sendable {
     case any = "", nature, places, travel, animals, backgrounds, buildings, science, transportation
@@ -64,6 +78,7 @@ struct DiscoverOptions: Codable, Equatable, Sendable {
     var sort = DiscoverSort.popular
     var resolution = DiscoverResolution.any
     var category = PixabayCategory.any                 // Pixabay only
+    var period: DiscoverPeriod?                         // Workshop only, with Popular
     var hideInLibrary = false                          // tiles of videos already in the library are left out
     /// Workshop: once the video is in the library, delete the copy Steam downloaded for it (see SteamDownload.removeCopy).
     var removeSteamCopy = true
@@ -82,6 +97,7 @@ struct DiscoverOptions: Codable, Equatable, Sendable {
         resolution = try container.decodeIfPresent(DiscoverResolution.self, forKey: .resolution)
             ?? (try legacy.decodeIfPresent(Bool.self, forKey: .only4K) == true ? .uhd : .any)
         category = try container.decodeIfPresent(PixabayCategory.self, forKey: .category) ?? .any
+        period = try container.decodeIfPresent(DiscoverPeriod.self, forKey: .period)
         hideInLibrary = try container.decodeIfPresent(Bool.self, forKey: .hideInLibrary) ?? false
         removeSteamCopy = try container.decodeIfPresent(Bool.self, forKey: .removeSteamCopy) ?? true
     }
@@ -94,10 +110,16 @@ struct DiscoverOptions: Codable, Equatable, Sendable {
         if let data = try? JSONEncoder().encode(self) { UserDefaults.standard.set(data, forKey: Self.key) }
     }
 
-    /// The menu's label for a source: "Nature · Popular · 4K".
+    /// The time range a source uses: only the Workshop's Popular has one.
+    func period(for source: DiscoverSource) -> DiscoverPeriod? {
+        source == .workshop && sort == .popular ? period : nil
+    }
+
+    /// The menu's label for a source: "Nature · Popular · 4K", "Popular This Week · 1440p+".
     func label(for source: DiscoverSource) -> String {
         let category = source == .pixabay && category != .any ? category.title : nil
-        return [category, sort.effective(for: source).title, resolution.shortTitle].compactMap { $0 }.joined(separator: " · ")
+        let sort = sort.effective(for: source).title + (period(for: source).map { " " + $0.title } ?? "")
+        return [category, sort, resolution.shortTitle].compactMap { $0 }.joined(separator: " · ")
     }
 }
 
@@ -202,6 +224,13 @@ struct DiscoverOptionsMenu: View {
                     ForEach(DiscoverSort.choices(for: model.discoverSource), id: \.self) { Text($0.title).tag($0) }
                 }
                 .pickerStyle(.inline)
+                if model.discoverSource == .workshop, model.discoverOptions.sort == .popular {
+                    Picker("Popular In", selection: Binding(get: { model.discoverOptions.period }, set: { model.setDiscoverPeriod($0) })) {
+                        Text("Any Time").tag(DiscoverPeriod?.none)
+                        ForEach(DiscoverPeriod.allCases, id: \.self) { Text($0.title).tag(DiscoverPeriod?.some($0)) }
+                    }
+                    .pickerStyle(.menu)
+                }
                 Divider()
                 Picker("Resolution", selection: Binding(get: { model.discoverOptions.resolution }, set: { model.setDiscoverResolution($0) })) {
                     ForEach(DiscoverResolution.allCases, id: \.self) { Text($0.title).tag($0) }

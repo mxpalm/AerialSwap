@@ -13,6 +13,17 @@ struct WorkshopItem: Identifiable, Hashable, Sendable {
 
     var page: URL? { URL(string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(id)") }
 
+    /// The preview for a tile: Steam's image server scales JPG previews (often 1-2K px, up to 1 MB) down to 360 px,
+    /// ~16x fewer bytes. GIFs come back unchanged (they're 160-256 px already).
+    var thumbnailURL: URL? {
+        guard let previewURL, var components = URLComponents(url: previewURL, resolvingAgainstBaseURL: false),
+              components.query == nil else { return previewURL }
+        components.queryItems = [URLQueryItem(name: "imw", value: "360"), URLQueryItem(name: "imh", value: "360"),
+                                 URLQueryItem(name: "ima", value: "fit"), URLQueryItem(name: "impolicy", value: "Letterbox"),
+                                 URLQueryItem(name: "letterbox", value: "false")]
+        return components.url
+    }
+
     /// "4K", "1440p", "1080p" from the creator's resolution tag, when it's one of the usual ones.
     var resolutionText: String? {
         let known = ["3840 x 2160": "4K", "2560 x 1440": "1440p", "1920 x 1080": "1080p", "1280 x 720": "720p"]
@@ -65,6 +76,8 @@ struct WorkshopTopic: Hashable, Identifiable, Sendable {
 struct WorkshopClient: Sendable {
     static let pageSize = 30
     static let homepage = URL(string: "https://steamcommunity.com/app/431960/workshop/")!
+    /// What Wallpaper Engine is, and where to buy it.
+    static let storePage = URL(string: "https://store.steampowered.com/app/431960/Wallpaper_Engine/")!
 
     let key: String?
     let proxy: URL?

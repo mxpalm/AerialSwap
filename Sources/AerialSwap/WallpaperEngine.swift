@@ -66,6 +66,12 @@ enum WallpaperEngine {
         return scan
     }
 
+    /// The video wallpaper in one download folder (e.g. right after Steam downloaded it), or nil when it isn't one.
+    static func video(in folder: URL) -> WorkshopVideo? {
+        if case .video(let video) = item(at: folder, source: "Steam") { return video }
+        return nil
+    }
+
     /// A small preview image, decoded as a thumbnail so a huge or malformed picture can't use much memory.
     static func thumbnail(_ url: URL, maxPixels: Int = 480) -> NSImage? {
         guard (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize).map({ $0 < 50 << 20 }) == true,

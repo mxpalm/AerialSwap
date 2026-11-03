@@ -27,6 +27,9 @@ enum Screen { case intro, home, configure, working }
 /// The sections of the home screen (the switcher in the top bar).
 enum HomeSection { case library, discover }
 
+/// Where Discover's videos come from: Pixabay, or Wallpaper Engine's Steam Workshop (downloaded by the user's Steam).
+enum DiscoverSource { case pixabay, workshop }
+
 /// What the Add from URL dialog gets from a link: one video, or the videos of a playlist, board, … to pick from.
 enum URLImportMode { case video, collection }
 
@@ -118,6 +121,22 @@ final class AppModel {
     var selectedDiscoverID: Int?
     @ObservationIgnored private var discoverPage = 0
     @ObservationIgnored private var discoverRequest = 0   // newer requests win over slower older ones
+    var discoverSource = DiscoverSource.pixabay
+    // Discover: Wallpaper Engine's Workshop (see WorkshopClient, SteamDownloader)
+    let workshop = WorkshopClient(proxy: PixabayClient().proxy)
+    var workshopTopic = WorkshopTopic.all[0]
+    var workshopSearch = ""               // what's typed; searched on Return
+    var workshopQuery = ""                // the search the results are for ("" = the topic)
+    var workshopItems: [WorkshopItem] = []
+    var workshopItemThumbnails: [String: NSImage] = [:]
+    var workshopTotal = 0
+    var isWorkshopLoading = false
+    var workshopError: String?
+    var selectedWorkshopItemID: String?
+    var confirmSteamDownload = false      // the one-time "Download with Steam?" question
+    @ObservationIgnored private var workshopPage = 0
+    @ObservationIgnored private var workshopRequest = 0
+    private var steamDownloader: SteamDownloader?
     /// Set while the loaded source is a Pixabay or Workshop video, so the library keeps the credit and its page.
     @ObservationIgnored private var sourceCredit: (credit: String, page: String?)?
     private var downloader: VideoDownloader?
@@ -424,14 +443,30 @@ final class AppModel {
 
     // MARK: - Discover
 
-    var selectedDiscoverVideo: DiscoverVideo? { discoverVideos.first { $0.id == selectedDiscoverID } }
+    var selectedDiscoverVideo: DiscoverVideo? {
+        discoverSource == .pixabay ? discoverVideos.first { $0.id == selectedDiscoverID } : nil
+    }
     /// Pixabay serves at most 500 results per search.
     var canLoadMoreDiscover: Bool { discoverVideos.count < min(discoverTotal, 500) && discoverError == nil }
 
     func openDiscover() {
         guard !isBusy else { return }
         section = .discover
-        if discoverVideos.isEmpty, !isDiscoverLoading { loadDiscover() }
+        loadDiscoverSourceIfEmpty()
+    }
+
+    func selectDiscoverSource(_ source: DiscoverSource) {
+        guard !isBusy, source != discoverSource else { return }
+        discoverSource = source
+        loadDiscoverSourceIfEmpty()
+        showBackgroundVideo()
+    }
+
+    private func loadDiscoverSourceIfEmpty() {
+        switch discoverSource {
+        case .pixabay: if discoverVideos.isEmpty, !isDiscoverLoading { loadDiscover() }
+        case .workshop: if workshopItems.isEmpty, !isWorkshopLoading { loadWorkshop() }
+        }
     }
 
     func selectDiscoverTopic(_ topic: DiscoverTopic) {
@@ -540,6 +575,131 @@ final class AppModel {
                     self.displayName = nil
                     try? FileManager.default.removeItem(at: destination)
                     if case DiscoverError.cancelled = error { self.notice = Notice(kind: .info, text: "Download cancelled.") }
+                    else { self.fail(error) }
+                    self.showBackgroundVideo()
+                }
+            }
+        }
+    }
+
+    // MARK: - Discover: Steam Workshop
+
+    var selectedWorkshopItem: WorkshopItem? {
+        discoverSource == .workshop ? workshopItems.first { $0.id == selectedWorkshopItemID } : nil
+    }
+    /// Steam's QueryFiles pages through at most 100 pages.
+    var canLoadMoreWorkshop: Bool {
+        workshopItems.count < min(workshopTotal, 100 * WorkshopClient.pageSize) && workshopError == nil
+    }
+
+    func selectWorkshopTopic(_ topic: WorkshopTopic) {
+        workshopTopic = topic
+        workshopSearch = ""
+        loadWorkshop()
+    }
+
+    func submitWorkshopSearch() {
+        let query = workshopSearch.trimmingCharacters(in: .whitespaces)
+        guard query != workshopQuery || workshopItems.isEmpty else { return }
+        loadWorkshop()
+    }
+
+    func clearWorkshopSearch() {
+        workshopSearch = ""
+        loadWorkshop()
+    }
+
+    /// Loads the first page of the current topic or search, or (more: true) the next page.
+    func loadWorkshop(more: Bool = false) {
+        guard !isSnapshot else { return }
+        let query = more ? workshopQuery : workshopSearch.trimmingCharacters(in: .whitespaces)
+        let page = more ? workshopPage + 1 : 1
+        workshopRequest += 1
+        let request = workshopRequest
+        if !more {
+            workshopQuery = query
+            workshopItems = []
+            workshopTotal = 0
+            selectedWorkshopItemID = nil
+            showBackgroundVideo()
+        }
+        isWorkshopLoading = true
+        workshopError = nil
+        let topic = workshopTopic
+        Task {
+            do {
+                let result = try await workshop.search(query, topic: topic, page: page)
+                guard request == workshopRequest else { return }
+                let known = Set(workshopItems.map(\.id))
+                let items = result.items.filter { !known.contains($0.id) }
+                workshopItems += items
+                workshopTotal = result.total
+                workshopPage = page
+                for item in items { loadWorkshopItemThumbnail(item) }
+            } catch {
+                guard request == workshopRequest else { return }
+                workshopError = error.localizedDescription
+                Log.error("Discover Workshop: \(error.localizedDescription)")
+            }
+            isWorkshopLoading = false
+        }
+    }
+
+    private func loadWorkshopItemThumbnail(_ item: WorkshopItem) {
+        guard workshopItemThumbnails[item.id] == nil, let url = item.previewURL else { return }
+        Task { if let image = await Self.remoteImage(url) { workshopItemThumbnails[item.id] = image } }
+    }
+
+    /// Selecting shows the item's preview picture full-window (Steam has no streamable video); again deselects it.
+    func selectWorkshopItem(_ item: WorkshopItem) {
+        guard !isBusy else { return }
+        selectedWorkshopItemID = item.id == selectedWorkshopItemID ? nil : item.id
+        showBackgroundVideo()
+    }
+
+    private static let steamConsentKey = "SteamDownloadConfirmed"
+
+    /// Download with Steam: asks once whether that's okay (see `confirmSteamDownload`), then downloads.
+    func downloadSelectedWorkshopItem() {
+        guard !isBusy, let item = selectedWorkshopItem else { return }
+        guard SteamDownload.isInstalled else { fail(SteamDownloadError.notInstalled); return }
+        guard UserDefaults.standard.bool(forKey: Self.steamConsentKey) else { confirmSteamDownload = true; return }
+        startSteamDownload(item)
+    }
+
+    func confirmAndDownloadWithSteam() {
+        UserDefaults.standard.set(true, forKey: Self.steamConsentKey)
+        if let item = selectedWorkshopItem { startSteamDownload(item) }
+    }
+
+    /// The user's Steam downloads the item; then it opens like a video from the Wallpaper Engine dialog.
+    private func startSteamDownload(_ item: WorkshopItem) {
+        guard !isBusy else { return }
+        pauseBackgroundVideo(in: .discover)
+        let downloader = SteamDownloader()
+        steamDownloader = downloader
+        displayName = item.title
+        backdrops["source"] = workshopItemThumbnails[item.id]
+        downloadSource = "Steam"
+        downloadDetail = "Your Steam app downloads it\(item.size > 0 ? " (\(item.size.formatted(.byteCount(style: .file))))" : ""). "
+            + "Meanwhile Steam shows you as playing Wallpaper Engine. Then you can trim it and set it as your wallpaper."
+        startProgress("Downloading with Steam", flow: .download, step: .download)
+
+        Task.detached {
+            do {
+                let folder = try await downloader.run(id: item.id) { p in
+                    Task { @MainActor in self.progress = p }
+                }
+                guard let video = WallpaperEngine.video(in: folder) else { throw SteamDownloadError.notAVideo }
+                await MainActor.run {
+                    self.stopProgress()
+                    self.useWorkshopVideo(video)
+                }
+            } catch {
+                await MainActor.run {
+                    self.stopProgress()
+                    self.displayName = nil
+                    if case SteamDownloadError.cancelled = error { self.notice = Notice(kind: .info, text: "Download cancelled.") }
                     else { self.fail(error) }
                     self.showBackgroundVideo()
                 }
@@ -877,6 +1037,8 @@ final class AppModel {
             guard let url = video.previewURL else { return nil }
             return ("discover-\(video.id)", url)
         }
+        // A Workshop pick shows its still preview: Steam has no video to stream.
+        if section == .discover, selectedWorkshopItem != nil { return nil }
         guard let item = backgroundLibraryItem else { return nil }
         return ("lib-\(item.id)", library.videoURL(item))
     }
@@ -1301,6 +1463,7 @@ final class AppModel {
         converter?.cancel()
         downloader?.cancel()
         urlImporter?.cancel()
+        steamDownloader?.cancel()
         toolInstaller?.cancel()
     }
 

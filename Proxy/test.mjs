@@ -59,4 +59,25 @@ assert.equal((await get(makeEnv({ key: "" }), "/videos?q=d")).status, 500);
 r = await worker.fetch(new Request("https://proxy.example/videos?q=e"), { PIXABAY_KEY: "SECRET" }, ctx);
 assert.equal(r.status, 200);
 
+// Workshop: the Steam key and the fixed app and tags are added; other parameters are dropped or clamped.
+env = makeEnv();
+env.STEAM_KEY = "STEAMSECRET";
+r = await get(env, "/workshop?search_text=ocean&numperpage=500&appid=1&key=STOLEN&tag=Nature&query_type=99&requiredtags[0]=Mature");
+assert.equal(r.status, 200);
+const steam = upstreamCalls.at(-1);
+assert.equal(steam.origin + steam.pathname, "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/");
+assert.equal(steam.searchParams.get("key"), "STEAMSECRET");
+assert.equal(steam.searchParams.get("appid"), "431960");
+assert.equal(steam.searchParams.get("numperpage"), "50");
+assert.equal(steam.searchParams.get("query_type"), "3");
+assert.equal(steam.searchParams.get("requiredtags[0]"), "Video");
+assert.equal(steam.searchParams.get("requiredtags[1]"), "Everyone");
+assert.equal(steam.searchParams.get("requiredtags[2]"), "Nature");
+assert.ok(!(await r.text()).includes("STEAMSECRET"));
+assert.equal((await get(env, "/workshop?numperpage=500&tag=Nature&query_type=99&search_text=ocean")).headers.get("X-Proxy-Cache"), "HIT");
+// A tag with odd characters is ignored; without a Steam key the route refuses.
+await get(env, "/workshop?tag=%3Cscript%3E");
+assert.equal(upstreamCalls.at(-1).searchParams.get("requiredtags[2]"), null);
+assert.equal((await get(makeEnv(), "/workshop")).status, 500);
+
 console.log("proxy tests passed");

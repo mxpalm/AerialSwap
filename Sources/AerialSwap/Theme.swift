@@ -209,12 +209,15 @@ struct Backdrop: View {
     var player: AVPlayer? = nil
     var blur: CGFloat = 0
     var scrim = Scrim.standard
+    var frames: PreviewFrames? = nil   // a small Workshop preview, played (and upscaled) instead of `image`
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 Group {
-                    if let image {
+                    if let frames {
+                        FramesView(frames: frames)
+                    } else if let image {
                         Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
                     } else {
                         LinearGradient(colors: [Color(red: 0.16, green: 0.22, blue: 0.34), Color(red: 0.05, green: 0.06, blue: 0.08)],
@@ -420,11 +423,45 @@ struct FitOrScroll<Content: View>: View {
 }
 
 /// A thumbnail image that fills its frame, or a placeholder gradient.
-/// Loops an animated image (GIF), which SwiftUI's Image shows only as its first frame. Fills its frame like
-/// `aspectRatio(contentMode: .fill)`, clipped to `cornerRadius`, and lets clicks through.
+/// Whether GIF previews may play: the window is active, and Reduce Motion and Low Power Mode are off. Animating
+/// every Workshop tile in the background cost ~23% of a CPU core with 12 visible.
+@propertyWrapper
+struct MayAnimate: DynamicProperty {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.controlActiveState) private var activeState
+
+    // Low Power Mode is read whenever the view updates (e.g. when the window becomes active again).
+    var wrappedValue: Bool { !reduceMotion && activeState != .inactive && !ProcessInfo.processInfo.isLowPowerModeEnabled }
+}
+
+/// Plays PreviewFrames filling the frame, drawn with high-quality interpolation (a small picture scaled up stays
+/// smooth). Paused unless MayAnimate.
+struct FramesView: View {
+    let frames: PreviewFrames
+
+    @MayAnimate private var mayAnimate
+
+    var body: some View {
+        if frames.images.count > 1 {
+            TimelineView(.animation(minimumInterval: frames.shortestDelay, paused: !mayAnimate)) { context in
+                picture(frames.image(at: context.date))
+            }
+        } else {
+            picture(frames.images[0])
+        }
+    }
+
+    private func picture(_ image: CGImage) -> some View {
+        Image(decorative: image, scale: 1).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+    }
+}
+
+/// Loops an animated image (GIF) in its own resolution, which SwiftUI's Image shows only as its first frame. Fills its
+/// frame like `aspectRatio(contentMode: .fill)`, clipped to `cornerRadius`, and lets clicks through.
 struct AnimatedImage: NSViewRepresentable {
     let image: NSImage
     var cornerRadius: CGFloat = 0
+    var plays = true
 
     final class View: NSView {
         let imageView = NSImageView()
@@ -435,7 +472,6 @@ struct AnimatedImage: NSViewRepresentable {
             layer?.masksToBounds = true
             layer?.cornerCurve = .continuous
             imageView.imageScaling = .scaleAxesIndependently
-            imageView.animates = true
             addSubview(imageView)
         }
 
@@ -460,6 +496,7 @@ struct AnimatedImage: NSViewRepresentable {
             view.imageView.image = image
             view.needsLayout = true
         }
+        view.imageView.animates = plays
         view.layer?.cornerRadius = cornerRadius
     }
 }
@@ -469,6 +506,9 @@ extension NSImage {
     var isAnimated: Bool {
         representations.contains { (($0 as? NSBitmapImageRep)?.value(forProperty: .frameCount) as? Int ?? 0) > 1 }
     }
+
+    /// Width in pixels; `size` is in points and depends on the picture's dpi (a 96 dpi screenshot is 3/4 as wide).
+    var pixelWidth: Int { representations.map(\.pixelsWide).max() ?? Int(size.width) }
 }
 
 struct Thumb: View {
@@ -476,13 +516,13 @@ struct Thumb: View {
     var cornerRadius: CGFloat = 10
     var animates = false   // plays a GIF (Workshop previews) instead of showing its first frame
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @MayAnimate private var mayAnimate
 
     var body: some View {
         Color.clear
             .overlay {
-                if let image, animates, !reduceMotion, image.isAnimated {
-                    AnimatedImage(image: image, cornerRadius: cornerRadius)
+                if let image, animates, image.isAnimated {
+                    AnimatedImage(image: image, cornerRadius: cornerRadius, plays: mayAnimate)
                 } else if let image {
                     Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
                 } else {

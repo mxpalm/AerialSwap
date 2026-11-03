@@ -160,8 +160,14 @@ directly with the same parameters. The query is always app 431960 with the requi
 Trending is this month's most popular (3, 30 days), a topic its tag's best rated (0). Previews load only from
 Steam's image hosts over https. There's no video to stream before downloading: the tiles play the creator's
 preview where it's an animated GIF (about half the video items; square, 160-256 px, at most 1 MB, like in Wallpaper
-Engine's own browser; still with Reduce Motion), and the window shows the preview blurred when it's smaller than
-1000 px. About 9% of items also have a YouTube preview (`previews` with `preview_type` 1, returned through the
+Engine's own browser). Tiles and the full-window preview pause while the window isn't active, in Low Power Mode and
+with Reduce Motion (`MayAnimate`): animating 12 tiles in the background cost ~23% of a CPU core. The window shows the creator's first extra screenshot when it's larger
+than the preview (about 14% of GIF items have one, mostly 1080p or more). A picture under 1000 px wide plays
+full-window with high-quality interpolation and is labelled "Low-res preview"; meanwhile `PreviewUpscaler` upscales
+it 4x frame by frame with Apple's ML upscaler (`VTSuperResolutionScaler`, as Enhance detail, but in image mode:
+video mode answers NaN for frames this small; about 40-200 ms a frame, 2-4 s for a typical GIF, ~300 MB while it
+runs) and swaps it in ("Low-res preview, upscaled"). Macs without the
+upscaler keep the interpolated frames. About 9% of items also have a YouTube preview (`previews` with `preview_type` 1, returned through the
 proxy's `return_previews=1`); AerialSwap doesn't use those. The keyless `ISteamRemoteStorage/GetPublishedFileDetails` doesn't help: it can't
 search, and its `file_url` is empty for Wallpaper Engine items.
 

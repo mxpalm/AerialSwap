@@ -111,10 +111,13 @@ struct WorkshopClient: Sendable {
         guard isAvailable else { throw WorkshopSearchError.noKey }
         var items = [URLQueryItem(name: "page", value: "\(page)"), URLQueryItem(name: "numperpage", value: "\(Self.pageSize)")]
         let sort = options.sort
+        let search = text.isEmpty ? topic.search : text
+        if let search { items.append(URLQueryItem(name: "search_text", value: String(search.prefix(100)))) }
         // Query types: 0 by votes, 1 by date, 3 by trend, 9 by subscriptions, 12 by text relevance.
-        if let search = text.isEmpty ? topic.search : text {
-            items += [URLQueryItem(name: "search_text", value: String(search.prefix(100))),
-                      URLQueryItem(name: "query_type", value: sort == .newest ? "1" : sort == .mostSubscribed ? "9" : "12")]
+        if let period = options.period(for: .workshop) {
+            items += [URLQueryItem(name: "query_type", value: "3"), URLQueryItem(name: "days", value: "\(period.rawValue)")]
+        } else if search != nil {
+            items.append(URLQueryItem(name: "query_type", value: sort == .newest ? "1" : sort == .mostSubscribed ? "9" : "12"))
         } else if sort == .newest || sort == .mostSubscribed {
             items.append(URLQueryItem(name: "query_type", value: sort == .newest ? "1" : "9"))
         } else if topic.tag == nil {

@@ -497,6 +497,12 @@ final class AppModel {
         applyDiscoverOptions(options)
     }
 
+    func setDiscoverPeriod(_ period: DiscoverPeriod?) {
+        var options = discoverOptions
+        options.period = period
+        applyDiscoverOptions(options)
+    }
+
     func setDiscoverCategory(_ category: PixabayCategory) {
         var options = discoverOptions
         options.category = category

@@ -138,6 +138,9 @@ and are kept between launches (`DiscoverOptions` default):
 - **Sort:** Popular or Newest (Pixabay `order=popular|latest`; Workshop by votes, this month's trend or relevance, or
   by date with query type 1). The Workshop also has **Most Subscribed** (query type 9, with searches too); Pixabay
   sorts that as Popular.
+- **Popular In** (Workshop, with Popular): Any Time, This Week, This Month or This Year. A time range ranks by trend
+  over those days (query type 3, `days` 7 / 30 / 365), for topics and searches alike. Any Time keeps each topic's own
+  ranking: Trending this month's trend, tag topics all-time votes, searches relevance. Pixabay has no time range.
 - **Resolution:** Any (1080p and up), 1440p and Up, or 4K Only. Pixabay uses `min_width` 1920 / 2560 / 3840. On the
   Workshop every video item has exactly one resolution tag (Wallpaper Engine sets it; checked on about 400 results,
   November 2026). So 4K requires `3840 x 2160`, and 1440p and Up excludes the lower tags (`excludedtags`, proxy

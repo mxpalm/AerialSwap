@@ -15,8 +15,20 @@ enum DiscoverSort: String, Codable, CaseIterable, Sendable {
 struct DiscoverOptions: Codable, Equatable, Sendable {
     var sort = DiscoverSort.popular
     var only4K = false   // Pixabay: at least 3840 px wide; Workshop: tagged 3840 x 2160 by its creator
+    /// Workshop: once the video is in the library, delete the copy Steam downloaded for it (see SteamDownload.removeCopy).
+    var removeSteamCopy = true
 
     private static let key = "DiscoverOptions"
+
+    init() {}
+
+    /// Options saved by older versions lack newer keys: those get their defaults instead of resetting everything.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sort = try container.decodeIfPresent(DiscoverSort.self, forKey: .sort) ?? .popular
+        only4K = try container.decodeIfPresent(Bool.self, forKey: .only4K) ?? false
+        removeSteamCopy = try container.decodeIfPresent(Bool.self, forKey: .removeSteamCopy) ?? true
+    }
 
     static func load() -> DiscoverOptions {
         UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(DiscoverOptions.self, from: $0) } ?? DiscoverOptions()
@@ -46,6 +58,11 @@ struct DiscoverOptionsMenu: View {
                 .pickerStyle(.inline)
                 Divider()
                 Toggle("4K Only", isOn: Binding(get: { model.discoverOptions.only4K }, set: { model.setDiscoverOnly4K($0) }))
+                if model.discoverSource == .workshop {
+                    Divider()
+                    Toggle("Remove Steam's Copy After Saving",
+                           isOn: Binding(get: { model.discoverOptions.removeSteamCopy }, set: { model.setRemoveSteamCopy($0) }))
+                }
             } label: {
                 labelView
             }

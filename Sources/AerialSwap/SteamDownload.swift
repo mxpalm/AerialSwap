@@ -112,6 +112,42 @@ enum SteamDownload {
     }
 
     /// A Workshop ID: digits only.
+    /// Deletes the folder Steam downloaded an item into, once the video is in the library. Only a Workshop item folder
+    /// (`…/workshop/content/431960/<id>`) that the account isn't subscribed to: Steam keeps subscribed items in sync
+    /// (e.g. ones subscribed on Windows) and would download them again. Steam doesn't bring a removed item back by
+    /// itself, and a later Download with Steam downloads it again (tested with Steam on macOS 27.2, November 2026).
+    @discardableResult
+    static func removeCopy(_ folder: URL) -> Bool {
+        let id = folder.lastPathComponent
+        let content = folder.deletingLastPathComponent()
+        let workshop = content.deletingLastPathComponent().deletingLastPathComponent()
+        guard isValidID(id), content.lastPathComponent == WallpaperEngine.appID,
+              content.deletingLastPathComponent().lastPathComponent == "content", workshop.lastPathComponent == "workshop"
+        else { Log.error("Steam: not removing \(folder.path): not a Workshop item folder"); return false }
+        let manifest = workshop.appending(path: "appworkshop_\(WallpaperEngine.appID).acf")
+        guard let text = try? String(contentsOf: manifest, encoding: .utf8), isSubscribed(id, manifest: text) == false else {
+            Log.info("Steam: keeping its copy of \(id) (subscribed, or not in Steam's list yet)")
+            return false
+        }
+        do {
+            try FileManager.default.removeItem(at: folder)
+            Log.info("Steam: removed its copy of \(id), the video is in the library")
+            return true
+        } catch {
+            Log.error("Steam: couldn't remove its copy of \(id): \(error.localizedDescription)")
+            return false
+        }
+    }
+
+    /// Whether Steam's appworkshop manifest has the item as subscribed: its WorkshopItemDetails entry has "subscribedby".
+    /// nil when the item has no entry (yet).
+    static func isSubscribed(_ id: String, manifest: String) -> Bool? {
+        guard let details = manifest.range(of: "\"WorkshopItemDetails\""),
+              let entry = manifest.range(of: "\"\(id)\"", range: details.upperBound..<manifest.endIndex),
+              let end = manifest.range(of: "}", range: entry.upperBound..<manifest.endIndex) else { return nil }
+        return manifest[entry.upperBound..<end.lowerBound].contains("\"subscribedby\"")
+    }
+
     static func isValidID(_ id: String) -> Bool { !id.isEmpty && id.count <= 20 && id.allSatisfy(\.isASCII) && id.allSatisfy(\.isNumber) }
 
     // MARK: - Child process

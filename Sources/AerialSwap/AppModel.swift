@@ -146,6 +146,9 @@ final class AppModel {
     /// Opens the finished download like a video the user added (set when it's ready).
     @ObservationIgnored private var openFinishedDownload: (() -> Void)?
     @ObservationIgnored private var discardFinishedDownload: (() -> Void)?   // the chip's ✕ on a finished download
+    /// The Workshop folder Steam downloaded for the loaded video, removed once it's saved (Remove Steam's Copy option).
+    /// Only set for downloads AerialSwap asked for: items Steam already had (e.g. subscribed ones) are left alone.
+    @ObservationIgnored private var steamCopyToRemove: URL?
     /// Set while the loaded source is a Pixabay or Workshop video, so the library keeps the credit and its page.
     @ObservationIgnored private var sourceCredit: (credit: String, page: String?)?
     private var downloader: VideoDownloader?
@@ -477,6 +480,11 @@ final class AppModel {
         var options = discoverOptions
         options.sort = sort
         applyDiscoverOptions(options)
+    }
+
+    func setRemoveSteamCopy(_ remove: Bool) {
+        discoverOptions.removeSteamCopy = remove
+        discoverOptions.save()
     }
 
     func setDiscoverOnly4K(_ only4K: Bool) {
@@ -932,6 +940,7 @@ final class AppModel {
                     let stillWanted = self.discoverSource == .workshop && self.selectedWorkshopItemID == item.id
                     self.finishBackgroundDownload(key, stillWanted: stillWanted) {
                         self.useWorkshopVideo(video, credit: item.credit)
+                        self.steamCopyToRemove = folder   // after loadSource, which forgets the last one
                     } discard: {}   // Steam's copy stays, like any Workshop download
                 }
             } catch {
@@ -1381,6 +1390,7 @@ final class AppModel {
     /// Loads a user-chosen file. If macOS can't read it, offers an ffmpeg conversion instead.
     func loadSource(_ url: URL, displayName: String? = nil) {
         guard !isBusy else { return }
+        steamCopyToRemove = nil
         if displayName == nil, let old = convertedTempURL {
             try? FileManager.default.removeItem(at: old)   // a new user file replaces the last conversion
             convertedTempURL = nil
@@ -1430,6 +1440,7 @@ final class AppModel {
         guard !isBusy else { return }
         stopPreview()
         sourceURL = nil; sourceInfo = nil; displayName = nil; filmstrip = []
+        steamCopyToRemove = nil
         showResolutionAlert = false
         if let old = convertedTempURL { try? FileManager.default.removeItem(at: old); convertedTempURL = nil }
     }
@@ -1909,7 +1920,14 @@ final class AppModel {
             // The loaded source was that intermediate, so it is gone now.
             stopPreview(); sourceURL = nil; sourceInfo = nil; displayName = nil
         }
-        Self.removeWorkDir()   // nothing in it is needed any more
+        if backgroundDownload == nil { Self.removeWorkDir() }   // nothing in it is needed any more (a Pixabay download may be)
+        if let folder = steamCopyToRemove, discoverOptions.removeSteamCopy {
+            Task {
+                await Task.detached { SteamDownload.removeCopy(folder) }.value
+                refreshSteamDownloads()
+            }
+        }
+        steamCopyToRemove = nil
     }
 
     private func fail(_ error: Error) {

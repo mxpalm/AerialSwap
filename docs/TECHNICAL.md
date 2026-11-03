@@ -219,6 +219,13 @@ anything from Steam itself.
    all. The app reads the child's output to the end (at most 2 s after it exits) before looking for `FOLDER`. **Cancel** ends the child (Steam may still finish the download).
 9. The folder must be `…/workshop/content/431960/<id>`. It's then read like any downloaded item; one that isn't a
    video, or isn't rated Everyone in its `project.json`, is refused (Steam keeps its copy).
+10. Once the video is saved to the library, **Remove Steam's Copy After Saving** (options menu, Workshop only, on by
+    default, `DiscoverOptions.removeSteamCopy`) deletes the item's folder (`SteamDownload.removeCopy`). Only for items
+    this download asked Steam for (not ones Steam already had, step 2), only a `…/workshop/content/431960/<id>` folder,
+    and only when `appworkshop_431960.acf` lists the item without `subscribedby`. Steam syncs the account's
+    subscriptions (e.g. made on Windows) to the Mac and would download those again; when the entry is missing, the
+    copy is kept. Tested (macOS 27.2, November 2026): Steam doesn't bring a removed item back by itself, and a later
+    Download with Steam downloads it again instead of reporting the missing folder as installed.
 
 `DownloadItem` doesn't subscribe the account: the item doesn't show up in the user's Workshop subscriptions, and
 Steam may remove it when it cleans up. AerialSwap's library keeps its own converted copy.
@@ -313,7 +320,7 @@ frame (e.g. 60–120 s): any unlock during the hold leaves that frame on the des
 | `~/Library/Application Support/AerialSwap/Index.plist.before-change` | `Store/Index.plist` as it was before the last desktop / screen saver switch |
 | `~/Library/Logs/AerialSwap.log` | Log |
 | `~/Library/Caches/AerialSwap/discover/` | Pixabay search results, kept 24 h |
-| `~/Library/Application Support/Steam/steamapps/workshop/content/431960/` | Steam's Workshop downloads (Download with Steam puts them there); only read |
+| `~/Library/Application Support/Steam/steamapps/workshop/content/431960/` | Steam's Workshop downloads (Download with Steam puts them there); read, and an item AerialSwap asked for is deleted after saving (Remove Steam's Copy) |
 | `io.github.mxpalm.AerialSwap` defaults `SteamKey`, `SteamDownloadConfirmed`, `SteamDownloadTimes` | Own Steam Web API key, consent to Download with Steam, start times of the last day's downloads (for the limits) |
 | `~/Library/Application Support/AerialSwap/tools/` | yt-dlp, deno, ffmpeg when installed without Homebrew |
 

@@ -132,6 +132,12 @@ the 4K version (1080p when Pixabay has no 4K) into the temp folder and opens it 
 set it. The library keeps the credit ("<user> on Pixabay"); right-click → **View on Pixabay**.
 Only real footage (`video_type=film`) of at least 1920 px width is listed, with SafeSearch on.
 
+The options menu next to Pixabay | Workshop applies to both sources and is kept between launches (`DiscoverOptions`
+default): **Popular** or **Newest** (Pixabay `order=popular|latest`; Workshop by votes, this month's trend or relevance,
+or by date with query type 1), and **4K Only** (Pixabay `min_width=3840`; Workshop the creator's tag `3840 x 2160`).
+Tiles of videos already in the library (matched by their page, `sourcePage`) say **In Library**; Workshop items that
+Steam already downloaded say **In Steam** (adding those is instant and doesn't count as a download).
+
 Discover needs a Pixabay API key (free at [pixabay.com/api/docs](https://pixabay.com/api/docs/)). Release builds
 don't contain one: they search through the Discover proxy, a small Cloudflare Worker that adds the key
 (see [`Proxy/README.md`](../Proxy/README.md); its address goes in `Resources/discover-proxy.url`). A key of your
@@ -156,6 +162,9 @@ installed, a test build honors `defaults write io.github.mxpalm.AerialSwap Simul
 offers this. Read [Steam Workshop downloads](#steam-workshop-downloads) under Known risks before changing it.
 
 **Search** (`WorkshopDiscover.swift`): Steam's `IPublishedFileService/QueryFiles`, which needs a Steam Web API key.
+Each item comes with its creator's public Steam name (`ISteamUser/GetPlayerSummaries`, added by the proxy, or asked
+for directly with a key of one's own): the caption says "Video by <name>", and the library credits "<name> on the
+Steam Workshop".
 Release builds ask the Discover proxy (`/workshop`, see `Proxy/README.md`), which holds the key as the `STEAM_KEY`
 secret; a key of one's own (`defaults write io.github.mxpalm.AerialSwap SteamKey <key>` or `STEAM_KEY`) asks Steam
 directly with the same parameters. The query is always app 431960 with the required tags `Video` and `Everyone`

@@ -14,6 +14,10 @@ const ALLOWED = ["q", "video_type", "min_width", "safesearch", "order", "per_pag
 const CACHE_SECONDS = 24 * 3600;
 
 const STEAM = "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/";
+// Public profile names of the items' creators, for the credit.
+const STEAM_PLAYERS = "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/";
+// resolution=4k: only wallpapers their creators tagged as 4K.
+const RESOLUTION_TAGS = { "4k": "3840 x 2160" };
 // Wallpaper Engine's Workshop, video wallpapers for everyone only: fixed here, whatever the app asks for.
 const WORKSHOP_APP = "431960";
 const WORKSHOP_TAGS = ["Video", "Everyone"];
@@ -69,7 +73,7 @@ export default {
   },
 };
 
-// GET /workshop?search_text=&query_type=&page=&numperpage=&days=&tag=   (all optional)
+// GET /workshop?search_text=&query_type=&page=&numperpage=&days=&tag=&resolution=   (all optional)
 async function workshop(url, request, env, ctx) {
   if (!env.STEAM_KEY) return error(500, "The proxy has no Steam key.");
   const query = new URLSearchParams();
@@ -84,9 +88,11 @@ async function workshop(url, request, env, ctx) {
   const tag = url.searchParams.get("tag");
   // Workshop tags are words like "Nature" or "Sci-Fi".
   if (tag && /^[A-Za-z0-9 &'-]{1,30}$/.test(tag)) tags.push(tag);
+  const resolution = RESOLUTION_TAGS[url.searchParams.get("resolution") ?? ""];
+  if (resolution) tags.push(resolution);
   tags.forEach((t, i) => query.set(`requiredtags[${i}]`, t));
   query.sort();
-  const cacheKey = `workshop-previews?${query}`;   // answers with previews (YouTube ids); older entries had none
+  const cacheKey = `workshop-creators?${query}`;   // answers with previews and creator names; older entries had neither
 
   const cached = await env.CACHE?.get(cacheKey);
   if (cached) return json(cached, 200, "HIT");
@@ -107,9 +113,33 @@ async function workshop(url, request, env, ctx) {
     console.error(`Steam HTTP ${upstream.status}: ${(await upstream.text()).slice(0, 200)}`);
     return error(502, "Steam answered with an error.");
   }
-  const body = await upstream.text();
+  const body = await withCreatorNames(await upstream.text(), env);
   if (env.CACHE) ctx.waitUntil(env.CACHE.put(cacheKey, body, { expirationTtl: WORKSHOP_CACHE_SECONDS }).catch(() => {}));
   return json(body, 200, "MISS");
+}
+
+// Adds `creator_name` (the public Steam profile name) to each item, in one GetPlayerSummaries call for the page.
+// When that fails, the answer goes out without names.
+async function withCreatorNames(body, env) {
+  let data;
+  try { data = JSON.parse(body); } catch { return body; }
+  const items = data?.response?.publishedfiledetails;
+  if (!Array.isArray(items)) return body;
+  const ids = [...new Set(items.map((item) => item?.creator).filter((id) => /^\d{1,20}$/.test(id ?? "")))].slice(0, 100);
+  if (ids.length === 0) return body;
+  try {
+    const players = await fetch(`${STEAM_PLAYERS}?key=${encodeURIComponent(env.STEAM_KEY)}&steamids=${ids.join(",")}`);
+    if (!players.ok) throw new Error(`HTTP ${players.status}`);
+    const names = new Map(((await players.json())?.response?.players ?? []).map((p) => [p.steamid, p.personaname]));
+    for (const item of items) {
+      const name = names.get(item?.creator);
+      if (typeof name === "string" && name.trim()) item.creator_name = name.trim().slice(0, 64);
+    }
+    return JSON.stringify(data);
+  } catch (e) {
+    console.error(`Steam player names: ${e.message}`);
+    return body;
+  }
 }
 
 function clamp(value, fallback, min, max) {

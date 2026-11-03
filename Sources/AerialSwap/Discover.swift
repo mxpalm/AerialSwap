@@ -137,15 +137,15 @@ struct PixabayClient: Sendable {
 
     var isAvailable: Bool { key != nil || proxy != nil }
 
-    /// Landscape-friendly real footage, at least 1080p, most popular first.
-    func search(_ query: String, editorsChoice: Bool = false, page: Int = 1) async throws -> Page {
+    /// Landscape-friendly real footage, at least 1080p (4K with `only4K`), most popular or newest first.
+    func search(_ query: String, editorsChoice: Bool = false, page: Int = 1, options: DiscoverOptions = DiscoverOptions()) async throws -> Page {
         guard isAvailable else { throw DiscoverError.noKey }
         var items = [
             URLQueryItem(name: "q", value: String(query.prefix(100))),
             URLQueryItem(name: "video_type", value: "film"),
-            URLQueryItem(name: "min_width", value: "1920"),
+            URLQueryItem(name: "min_width", value: options.only4K ? "3840" : "1920"),
             URLQueryItem(name: "safesearch", value: "true"),
-            URLQueryItem(name: "order", value: "popular"),
+            URLQueryItem(name: "order", value: options.sort == .newest ? "latest" : "popular"),
             URLQueryItem(name: "per_page", value: "\(Self.pageSize)"),
             URLQueryItem(name: "page", value: "\(page)"),
         ]

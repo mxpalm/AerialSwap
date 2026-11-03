@@ -27,6 +27,9 @@ AerialSwap  --GET /workshop-status-->  Worker  -->  {"downloads": true}   (WORKS
 - Only `search_text` (100 characters), `query_type` (0, 1, 3, 9, 12; else 3), `days` (1-365), `page` (1-100) and
   `numperpage` (3-50) are forwarded.
 - Always with `return_tags` and `return_previews` (extra screenshots and YouTube preview ids).
+- `resolution=4k` adds the tag `3840 x 2160` (4K only).
+- Each item gets `creator_name`, its creator's public Steam profile name, from one `ISteamUser/GetPlayerSummaries`
+  call per page (skipped when that fails).
 - Cached for an hour in KV; the same per-IP limit as `/videos`.
 - Without the `STEAM_KEY` secret it answers 500, and the app shows that Workshop search doesn't work.
 - Workshop files never go through the proxy, and neither does the app's download: the user's own Steam downloads them.

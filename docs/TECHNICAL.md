@@ -126,7 +126,7 @@ cut to 120 characters, and previews are decoded as small thumbnails. The file st
 read. The library credits "a Steam Workshop creator" and links the item's Workshop page (right-click → **View on
 Steam Workshop**).
 
-**Discover:** free videos from [Pixabay](https://pixabay.com/). Pick a topic (Featured, From Above, Mountains, …)
+**Discover:** free videos from [Pixabay](https://pixabay.com/). Pick one of 16 topics (Featured, From Above, Mountains, …)
 or search, then pick a video to preview it full size (a smaller version, at least 1280 px wide, is streamed). **Use This Video** downloads
 the 4K version (1080p when Pixabay has no 4K) into the temp folder and opens it like a video you added: trim, pick
 set it. The library keeps the credit ("<user> on Pixabay"); right-click → **View on Pixabay**.
@@ -168,7 +168,8 @@ Steam Workshop".
 Release builds ask the Discover proxy (`/workshop`, see `Proxy/README.md`), which holds the key as the `STEAM_KEY`
 secret; a key of one's own (`defaults write io.github.mxpalm.AerialSwap SteamKey <key>` or `STEAM_KEY`) asks Steam
 directly with the same parameters. The query is always app 431960 with the required tags `Video` and `Everyone`
-(the proxy forces both, whatever the app sends); a topic adds one tag. Search ranks by relevance (query type 12),
+(the proxy forces both, whatever the app sends); a topic adds one tag, or searches for subjects that aren't tags
+(Space, City, Rain, Ocean). Search ranks by relevance (query type 12),
 Trending is this month's most popular (3, 30 days), a topic its tag's best rated (0). Previews load only from
 Steam's image hosts over https; tiles ask Steam's image server for JPG previews scaled to 360 px (`imw`/`imh`, ~16x
 fewer bytes; GIFs come back as they are), and the full-size preview loads only for the selected item. There's no video to stream before downloading: the tiles play the creator's

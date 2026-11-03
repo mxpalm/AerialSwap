@@ -12,6 +12,9 @@ struct HomeView: View {
         if model.section == .discover, let video = model.selectedDiscoverVideo {
             return model.backdrops["discover-\(video.id)"] ?? model.discoverThumbnails[video.id]
         }
+        if model.section == .discover, let item = model.selectedWorkshopItem {
+            return model.workshopItemThumbnails[item.id]
+        }
         if let item = model.selectedLibraryItem, let image = model.backdrops["lib-\(item.id)"] { return image }
         return model.desktopAsset.flatMap { model.backdrops[model.backdropKey(for: $0)] }
     }

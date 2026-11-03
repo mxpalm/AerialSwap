@@ -28,7 +28,12 @@ enum Snapshot {
                 m.section = .discover
                 m.selectedDiscoverID = m.discoverVideos[2].id
             }),
+            ("04c2-discover-workshop", { m in
+                m.discoverSource = .workshop
+                m.selectedWorkshopItemID = m.workshopItems[1].id
+            }),
             ("04d-url-import", { m in
+                m.discoverSource = .pixabay
                 m.section = .library
                 m.urlImportText = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
                 m.urlImportStart = "1:30"; m.urlImportEnd = "1:45"
@@ -189,6 +194,22 @@ enum Snapshot {
             model.backdrops["discover-\(video.id)"] = await frame(url, large: true)
         }
         model.discoverTotal = 240
+
+        let workshop: [(String, String, [String], Int64)] = [
+            ("Ocean Sunset Ambience", "src_2160p24.mov", ["Video", "Landscape", "3840 x 2160", "Everyone"], 321_000_000),
+            ("Lullaby of the Ocean", "scene_2160p30.mov", ["Video", "Nature", "3840 x 2160", "Everyone"], 367_000_000),
+            ("Rainy Night in Tokyo", "hdr_hlg1080.mov", ["Video", "Relaxing", "1920 x 1080", "Everyone"], 93_000_000),
+            ("Slow-Mo Ocean", "src_1080p24.mov", ["Video", "Abstract", "1920 x 1080", "Everyone"], 49_000_000),
+            ("Northern Lights", "src_2160p60.mov", ["Video", "Nature", "2560 x 1440", "Everyone"], 152_000_000),
+            ("Pixel Harbour", "src_wide24.mov", ["Video", "Pixel art", "Other resolution", "Everyone"], 26_000_000),
+        ]
+        for (index, (title, file, tags, size)) in workshop.enumerated() {
+            let item = WorkshopItem(id: "\(2_900_000_000 + index)", title: title, previewURL: nil, size: size, tags: tags,
+                                    subscriptions: 1000)
+            model.workshopItems.append(item)
+            model.workshopItemThumbnails[item.id] = await frame(footage.appending(path: file), large: true)
+        }
+        model.workshopTotal = 180
 
         for (index, video) in linkSample.videos.enumerated() {
             let files = ["scene_2160p30.mov", "src_portrait30.mov", "src_1080p24.mov", "hdr_hlg1080.mov", "src_wide24.mov",

@@ -12,6 +12,7 @@ enum Main {
             Task { exit(await CLI.run(args)) }
             dispatchMain()
         }
+        if args.first == "--steam-download" { exit(SteamDownload.runChild(args)) }   // started by SteamDownloader
         if args.first == "--snapshot" {
             // ImageRenderer needs the real main thread, so keep its run loop going (dispatchMain would exit it).
             Task { @MainActor in exit(await Snapshot.run(args)) }

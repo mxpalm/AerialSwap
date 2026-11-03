@@ -62,6 +62,14 @@ struct ContentView: View {
         } message: {
             Text(deleteText)
         }
+        .alert("Download with Steam?", isPresented: $model.confirmSteamDownload) {
+            Button("Download with Steam") { model.confirmAndDownloadWithSteam() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("AerialSwap asks your Steam app to download the wallpaper, the way Wallpaper Engine does. Steam has to be "
+                 + "logged in to an account that owns Wallpaper Engine, and shows you as playing Wallpaper Engine while it "
+                 + "downloads. AerialSwap never sees your Steam login.\n\nOnly use wallpapers you're allowed to use.")
+        }
         .alert("Install helpers?", isPresented: toolInstallBinding) {
             Button("Install") { model.installTools() }
             Button("Cancel", role: .cancel) { model.cancelToolInstall() }

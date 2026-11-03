@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Free videos from Pixabay: pick one to preview it full-window, then download it and set it up like any added video.
+/// Free videos from Pixabay, or video wallpapers from Wallpaper Engine's Steam Workshop: pick one to preview it
+/// full-window, then download it and set it up like any added video.
 struct DiscoverLayout: View {
     @Bindable var model: AppModel
 
@@ -10,8 +11,10 @@ struct DiscoverLayout: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.leading, 8)
                 .padding(.bottom, 12)
-            DiscoverPanel(model: model)
-                .frame(width: 460)
+            Group {
+                if model.discoverSource == .workshop { WorkshopPanel(model: model) } else { DiscoverPanel(model: model) }
+            }
+            .frame(width: 460)
         }
         .padding(.horizontal, 16)
         .padding(.top, 4)
@@ -22,7 +25,25 @@ struct DiscoverLayout: View {
 
     @ViewBuilder private var previewCaption: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if let video = model.selectedDiscoverVideo {
+            if let item = model.selectedWorkshopItem {
+                Text("Previewing").font(.system(size: 13, weight: .semibold)).opacity(0.9)
+                Text(item.title).font(.system(size: 40, weight: .bold)).tracking(-0.8).lineLimit(2)
+                Text(workshopDetails(item)).font(.system(size: 14)).opacity(0.9)
+                if let page = item.page {
+                    RenderableLink(destination: page, flat: model.isSnapshot) {
+                        Label("On the Steam Workshop", systemImage: "arrow.up.right")
+                            .labelStyle(TrailingIconLabelStyle())
+                    }
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.top, 2)
+                }
+            } else if model.discoverSource == .workshop {
+                Text("Discover").font(.system(size: 13, weight: .semibold)).opacity(0.9)
+                Text("Wallpaper Engine").font(.system(size: 40, weight: .bold)).tracking(-0.8)
+                Text("Video wallpapers from the Steam Workshop, downloaded by your own Steam. Pick one to see its preview.")
+                    .font(.system(size: 14)).opacity(0.9)
+            } else if let video = model.selectedDiscoverVideo {
                 Text("Previewing").font(.system(size: 13, weight: .semibold)).opacity(0.9)
                 Text(video.title).font(.system(size: 40, weight: .bold)).tracking(-0.8).lineLimit(2)
                 Text(details(video)).font(.system(size: 14)).opacity(0.9)
@@ -45,6 +66,11 @@ struct DiscoverLayout: View {
         .overVideo()
     }
 
+    private func workshopDetails(_ item: WorkshopItem) -> String {
+        ([item.resolutionText, item.size > 0 ? item.size.formatted(.byteCount(style: .file)) : nil] + item.genres.prefix(2).map(Optional.some))
+            .compactMap { $0 }.joined(separator: " · ")
+    }
+
     private func details(_ video: DiscoverVideo) -> String {
         let file = video.download
         return [minutesText(video.duration), "\(file.width)×\(file.height)", file.size.formatted(.byteCount(style: .file))]
@@ -58,7 +84,7 @@ private func minutesText(_ seconds: Double) -> String {
 }
 
 /// "Title ↗": the icon after the text, for links.
-private struct TrailingIconLabelStyle: LabelStyle {
+struct TrailingIconLabelStyle: LabelStyle {
     func makeBody(configuration: Configuration) -> some View {
         HStack(spacing: 4) {
             configuration.title
@@ -86,12 +112,12 @@ private struct DiscoverPanel: View {
     }
 
     private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text("Discover").font(.system(size: 17, weight: .bold))
+        HStack(alignment: .center, spacing: 8) {
+            DiscoverSourcePicker(model: model)
             Spacer()
             // Pixabay asks for a visible link wherever its results are shown.
             RenderableLink(destination: PixabayClient.homepage, flat: model.isSnapshot) {
-                Label("Videos from Pixabay", systemImage: "arrow.up.right").labelStyle(TrailingIconLabelStyle())
+                Label("pixabay.com", systemImage: "arrow.up.right").labelStyle(TrailingIconLabelStyle())
             }
             .font(.system(size: 12))
             .foregroundStyle(Theme.secondary)

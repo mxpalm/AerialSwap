@@ -45,8 +45,13 @@ enum Snapshot {
                 m.backgroundDownload = BackgroundDownload(key: "workshop-\(item.id)", title: item.title, source: "Steam",
                                                           state: .ready, detail: "")
             }),
-            ("04d-url-import", { m in
+            ("04c5-workshop-not-owned", { m in
                 m.backgroundDownload = nil
+                m.ownsWallpaperEngine = false
+                m.selectedWorkshopItemID = m.workshopItems[0].id
+            }),
+            ("04d-url-import", { m in
+                m.ownsWallpaperEngine = nil
                 m.discoverSource = .pixabay
                 m.section = .library
                 m.urlImportText = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"

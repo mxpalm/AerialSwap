@@ -162,6 +162,12 @@ struct WorkshopPanel: View {
         }
     }
 
+    /// The account doesn't own Wallpaper Engine and Steam doesn't have the item yet: Steam won't download it.
+    private var needsWallpaperEngine: Bool {
+        guard model.ownsWallpaperEngine == false, let item = model.selectedWorkshopItem, download == nil else { return false }
+        return model.status(of: item) != .inSteam
+    }
+
     private var canDownload: Bool {
         guard model.selectedWorkshopItem != nil else { return false }
         if let download { return download.isReady && model.canOpenBackgroundDownload }
@@ -171,7 +177,13 @@ struct WorkshopPanel: View {
     /// Without Steam for Mac there's nothing to download with: the button gets Steam instead.
     private var footer: some View {
         VStack(spacing: 8) {
-            if SteamDownload.isInstalled || model.isSnapshot {
+            if needsWallpaperEngine {
+                Link(destination: WorkshopClient.storePage) {
+                    Label("Get Wallpaper Engine", systemImage: "arrow.up.right").labelStyle(TrailingIconLabelStyle())
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(PillButtonStyle(kind: .secondary, height: 44, fullWidth: true))
+            } else if SteamDownload.isInstalled || model.isSnapshot {
                 Button(buttonTitle) { model.downloadSelectedWorkshopItem() }
                     .buttonStyle(PillButtonStyle(kind: .primary, height: 44, fullWidth: true))
                     .disabled(!canDownload)
@@ -196,6 +208,9 @@ struct WorkshopPanel: View {
             return "Downloading needs Steam for Mac and a Steam account that owns Wallpaper Engine."
         }
         guard let item = model.selectedWorkshopItem else { return "Pick a wallpaper above. Needs Wallpaper Engine on your Steam account." }
+        if needsWallpaperEngine {
+            return "Your Steam account doesn't own Wallpaper Engine, so Steam can't download this. Items marked In Steam still work."
+        }
         if let download { return download.isReady ? "Downloaded: trim it and pick an Aerial" : download.detail }
         if let other = model.backgroundDownload {
             return other.isReady ? "Open or discard “\(other.title)” first (top bar)" : "One download at a time: “\(other.title)” is still downloading"

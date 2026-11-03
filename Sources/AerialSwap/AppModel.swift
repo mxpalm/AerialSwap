@@ -138,6 +138,10 @@ final class AppModel {
     var selectedWorkshopItemID: String?
     var confirmSteamDownload = false      // the one-time "Download with Steam?" question
     var showSteamNeeded = false           // Workshop picked without Steam for Mac
+    /// Whether the Steam account owns Wallpaper Engine (nil: not known, e.g. Steam isn't running). Checked when the Workshop
+    /// opens, so a missing license shows before a download is tried (see checkWallpaperEngineOwnership).
+    var ownsWallpaperEngine: Bool?
+    @ObservationIgnored private var ownershipCheckedAt: Date?
     @ObservationIgnored private var workshopPage = 0
     @ObservationIgnored private var workshopRequest = 0
     private var steamDownloader: SteamDownloader?
@@ -773,7 +777,7 @@ final class AppModel {
         workshopError = nil
         let topic = workshopTopic
         let options = discoverOptions
-        if !more { refreshSteamDownloads() }
+        if !more { refreshSteamDownloads(); checkWallpaperEngineOwnership() }
         Task {
             do {
                 let result = try await workshop.search(query, topic: topic, page: page, options: options)
@@ -855,6 +859,7 @@ final class AppModel {
     /// again deselects it.
     func selectWorkshopItem(_ item: WorkshopItem) {
         guard !isBusy else { return }
+        if ownsWallpaperEngine == false { checkWallpaperEngineOwnership() }
         selectedWorkshopItemID = item.id == selectedWorkshopItemID ? nil : item.id
         if selectedWorkshopItemID != nil {
             let full = hasFullWorkshopPreview(item) ? nil : item.previewURL
@@ -869,6 +874,19 @@ final class AppModel {
         }
         updateWorkshopPreview()
         showBackgroundVideo()
+    }
+
+    /// Asks a running Steam whether the account owns Wallpaper Engine: once per launch while it does, every minute at
+    /// most while it doesn't (it may have been bought meanwhile). Only after the user agreed to Download with Steam: the
+    /// check briefly shows them as playing Wallpaper Engine, which that question explains.
+    func checkWallpaperEngineOwnership() {
+        guard !isSnapshot, UserDefaults.standard.bool(forKey: Self.steamConsentKey), ownsWallpaperEngine != true,
+              ownershipCheckedAt.map({ Date.now.timeIntervalSince($0) > 60 }) ?? true else { return }
+        ownershipCheckedAt = .now
+        Task {
+            let owned = await SteamDownload.checkOwnership()
+            if let owned { ownsWallpaperEngine = owned } else { ownershipCheckedAt = nil }   // unknown: ask again next time
+        }
     }
 
     private static let steamConsentKey = "SteamDownloadConfirmed"
@@ -928,7 +946,10 @@ final class AppModel {
                     }
                 }, started: {
                     SteamDownload.recordDownload()
-                    Task { @MainActor in self.updateBackgroundDownload(key, .running(0), detail: detail) }
+                    Task { @MainActor in
+                        self.ownsWallpaperEngine = true   // Steam accepted the download
+                        self.updateBackgroundDownload(key, .running(0), detail: detail)
+                    }
                 }) { p in
                     Task { @MainActor in self.updateBackgroundDownload(key, .running(p)) }
                 }
@@ -946,6 +967,7 @@ final class AppModel {
             } catch {
                 await MainActor.run {
                     self.steamDownloader = nil
+                    if case SteamDownloadError.notOwned = error { self.ownsWallpaperEngine = false; self.ownershipCheckedAt = .now }
                     self.failBackgroundDownload(key, error, cancelled: { if case SteamDownloadError.cancelled = $0 { true } else { false } })
                 }
             }

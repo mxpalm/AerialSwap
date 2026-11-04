@@ -121,6 +121,7 @@ private struct GeneralSettings: View {
     @Bindable var model: AppModel
     @AppStorage(Preferences.checksForUpdatesKey) private var checksForUpdates = true
     @State private var temporaryBytes: Int64?
+    @State private var confirmsDelete = false
 
     var body: some View {
         Form {
@@ -133,11 +134,16 @@ private struct GeneralSettings: View {
                 LabeledContent("Temporary files and caches") {
                     HStack {
                         Text(temporaryBytes.map { $0.formatted(.byteCount(style: .file)) } ?? "…").foregroundStyle(.secondary)
-                        Button("Delete") {
-                            model.removeTemporaryData()
-                            measure()
-                        }
-                        .disabled(temporaryBytes == 0)
+                        Button("Delete…") { confirmsDelete = true }
+                            .disabled(temporaryBytes == 0)
+                            .confirmationDialog("Delete temporary files and caches?", isPresented: $confirmsDelete) {
+                                Button("Delete", role: .destructive) {
+                                    model.removeTemporaryData()
+                                    measure()
+                                }
+                            } message: {
+                                Text("Your library isn't touched. The first previews and upscales afterwards take a little longer.")
+                            }
                     }
                 }
                 Text("Discover's cached results, compiled ML models and leftovers of conversions. Your library isn't touched; "

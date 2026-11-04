@@ -121,7 +121,7 @@ already in your library); videos you already have say **In Library**.
 Press **⌘,** (or click the ⚙ button, then **Settings…**) to choose:
 
 - **General**: whether AerialSwap checks for updates once a day, and how much space its temporary files and caches
-  take (**Delete** frees it; your library isn't touched).
+  take (**Delete…** frees it after asking; your library isn't touched).
 - **New Wallpapers**: what a new video starts with: Motion, Seamless loop and Enhance detail.
 - **Workshop**: start Steam as soon as you open the Workshop (so downloads start sooner), quit Steam with AerialSwap
   if AerialSwap started it, remove Steam's copy after saving, and when small previews are upscaled with Apple's ML

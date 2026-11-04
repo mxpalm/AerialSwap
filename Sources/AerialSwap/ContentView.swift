@@ -219,6 +219,7 @@ struct TopBarActions: View {
                 }
                 Divider()
             }
+            SettingsLink { Text("Settings…") }
             Button("Open Wallpaper Settings") { model.openWallpaperSettings() }
             Button("Show Library in Finder") { model.revealLibrary() }
             Button("Open Log") { model.openLog() }

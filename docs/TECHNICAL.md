@@ -201,7 +201,8 @@ full-window with high-quality interpolation and is labelled "Low-res preview"; m
 it 4x frame by frame with Apple's ML upscaler (`VTSuperResolutionScaler`, as Enhance detail, but in image mode:
 video mode answers NaN for frames this small; about 40-200 ms a frame, 2-4 s for a typical GIF, ~300 MB while it
 runs) and swaps it in ("Low-res preview, upscaled"). Macs without the
-upscaler keep the interpolated frames. About 9% of items also have a YouTube preview (`previews` with `preview_type` 1, returned through the
+upscaler keep the interpolated frames, and so does **Upscale small previews** in Settings → Workshop when set to Never,
+or to Only When Plugged In while on battery (`PreviewUpscaling`, IOKit's providing power source). About 9% of items also have a YouTube preview (`previews` with `preview_type` 1, returned through the
 proxy's `return_previews=1`); AerialSwap doesn't use those. The keyless `ISteamRemoteStorage/GetPublishedFileDetails` doesn't help: it can't
 search, and its `file_url` is empty for Wallpaper Engine items.
 
@@ -212,9 +213,13 @@ anything from Steam itself.
 2. If Steam already has the item (any library above), that copy is used and Steam isn't asked.
 3. The limits and the remote switch below are checked. A download counts (`SteamDownloadTimes`) once Steam accepted it
    (step 8), so attempts that fail earlier (Steam not logged in, Wallpaper Engine not owned) don't.
-4. Steam is started hidden and without focus if it isn't running. Steam counts as installed only when macOS knows
-   `Steam.app` and its runtime (`Steam.AppBundle`) exists: deleting Steam.app leaves the runtime behind, and then the
-   button offers to get Steam instead.
+4. Steam is started hidden and without focus if it isn't running (`SteamDownload.launchIfNeeded`; with **Start Steam
+   when opening the Workshop** in Settings already when the Workshop opens). Steam counts as installed only when macOS
+   knows `Steam.app` and its runtime (`Steam.AppBundle`) exists: deleting Steam.app leaves the runtime behind, and then
+   the button offers to get Steam instead. AerialSwap remembers when it first started Steam; on quit,
+   `SteamDownload.quitIfStarted` asks every Steam launched since then to quit (**Quit Steam with AerialSwap if
+   AerialSwap started it**, on by default). Any Steam launched since counts because Steam may restart itself to update;
+   a Steam that was already running when AerialSwap needed it is never quit.
 5. AerialSwap starts itself again as a child process: `AerialSwap --steam-download <id>` with `SteamAppId` and
    `SteamGameId` set to 431960. Steamworks binds a process to one app ID for its lifetime, so the app itself never
    loads Steamworks; while the child runs, Steam shows the user as playing Wallpaper Engine.
@@ -233,7 +238,7 @@ anything from Steam itself.
    all. The app reads the child's output to the end (at most 2 s after it exits) before looking for `FOLDER`. **Cancel** ends the child (Steam may still finish the download).
 9. The folder must be `…/workshop/content/431960/<id>`. It's then read like any downloaded item; one that isn't a
    video, or isn't rated Everyone in its `project.json`, is refused (Steam keeps its copy).
-10. Once the video is saved to the library, **Remove Steam's Copy After Saving** (options menu, Workshop only, on by
+10. Once the video is saved to the library, **Remove Steam's copy after saving** (Settings → Workshop, on by
     default, `DiscoverOptions.removeSteamCopy`) deletes the item's folder (`SteamDownload.removeCopy`), also when Steam
     already had it (step 2), e.g. from an earlier AerialSwap download. Only in Steam for Mac's own library (not a
     Windows Steam in CrossOver or other bottles, `SteamDownload.itemFolder`), only a `…/workshop/content/431960/<id>`

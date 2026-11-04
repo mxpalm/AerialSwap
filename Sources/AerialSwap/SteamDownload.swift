@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Security
+import Synchronization
 
 /// Downloads a Wallpaper Engine Workshop item with the user's own Steam for Mac: no Windows, no console, no login in
 /// AerialSwap. It asks the running Steam app through Valve's Steamworks library (ISteamUGC::DownloadItem), the way
@@ -33,13 +34,29 @@ enum SteamDownload {
     static var isRunning: Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: steamBundleID).isEmpty }
 
     /// Starts Steam in the background (hidden, without taking focus), so a download doesn't need the user to open it.
-    static func launchIfNeeded() async {
+    static func launchIfNeeded(for reason: String = "a Workshop download") async {
         guard !isRunning, let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: steamBundleID) else { return }
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
         configuration.hides = true
-        Log.info("Steam: starting it for a Workshop download")
+        Log.info("Steam: starting it for \(reason)")
+        startedAt.withLock { $0 = $0 ?? .now }
         _ = try? await NSWorkspace.shared.openApplication(at: app, configuration: configuration)
+    }
+
+    /// When AerialSwap first started Steam; nil when Steam was already running whenever AerialSwap needed it.
+    private static let startedAt = Mutex<Date?>(nil)
+
+    /// Quits Steam when AerialSwap started it (Settings → Workshop): it keeps running in the background and uses power.
+    /// A Steam opened before that is the user's own and stays. Steam may restart itself to update, so any Steam launched
+    /// since then counts.
+    static func quitIfStarted() {
+        guard let started = startedAt.withLock({ $0 }), Preferences.quitsSteam else { return }
+        for app in NSRunningApplication.runningApplications(withBundleIdentifier: steamBundleID)
+        where (app.launchDate ?? .distantPast) >= started {
+            Log.info("Steam: quitting it, AerialSwap started it")
+            app.terminate()
+        }
     }
 
     /// Steam's libsteam_api.dylib: the known place first, else wherever a Steam update moved it. Only Valve-signed copies.

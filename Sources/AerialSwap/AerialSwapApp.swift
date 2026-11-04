@@ -58,6 +58,10 @@ struct AerialSwapApp: App {
         }
         .windowResizability(.contentMinSize)
         .defaultSize(width: 1180, height: 760)
+
+        Settings {
+            SettingsView(model: model)
+        }
     }
 }
 

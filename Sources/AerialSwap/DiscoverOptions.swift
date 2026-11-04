@@ -81,6 +81,7 @@ struct DiscoverOptions: Codable, Equatable, Sendable {
     var period: DiscoverPeriod?                         // Workshop only, with Popular
     var hideInLibrary = false                          // tiles of videos already in the library are left out
     /// Workshop: once the video is in the library, delete the copy Steam downloaded for it (see SteamDownload.removeCopy).
+    /// Set in Settings → Workshop.
     var removeSteamCopy = true
 
     private static let key = "DiscoverOptions"
@@ -244,10 +245,6 @@ struct DiscoverOptionsMenu: View {
                     .pickerStyle(.menu)
                 }
                 Toggle("Hide Videos in Library", isOn: Binding(get: { model.discoverOptions.hideInLibrary }, set: { model.setHideInLibrary($0) }))
-                if model.discoverSource == .workshop {
-                    Toggle("Remove Steam's Copy After Saving",
-                           isOn: Binding(get: { model.discoverOptions.removeSteamCopy }, set: { model.setRemoveSteamCopy($0) }))
-                }
             } label: {
                 labelView
             }

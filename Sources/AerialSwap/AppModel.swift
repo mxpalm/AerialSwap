@@ -316,7 +316,7 @@ final class AppModel {
         let pixabay = pixabay
         Task.detached(priority: .background) { pixabay.pruneCache() }
         Task {
-            guard let update = try? await UpdateChecker.check() else { return }
+            guard Preferences.checksForUpdates, let update = try? await UpdateChecker.check() else { return }
             availableUpdate = update
             if notice == nil {
                 notice = Notice(kind: .info, text: "AerialSwap \(update.version) is available. "
@@ -476,6 +476,9 @@ final class AppModel {
         // The Workshop's wallpapers can only be downloaded with Steam for Mac: without it, say what to do instead.
         if source == .workshop, !SteamDownload.isInstalled, !isSnapshot { showSteamNeeded = true; return }
         discoverSource = source
+        if source == .workshop, Preferences.startsSteamForWorkshop, !isSnapshot {
+            Task { await SteamDownload.launchIfNeeded(for: "the Workshop (Settings)") }
+        }
         loadDiscoverSourceIfEmpty()
         showBackgroundVideo()
     }
@@ -878,6 +881,7 @@ final class AppModel {
         workshopUpscaleTask?.cancel()
         guard let frames = PreviewFrames(image) else { workshopPreview = nil; return }
         workshopPreview = WorkshopPreview(id: item.id, source: source, frames: frames)
+        guard Preferences.previewUpscaling.isAllowedNow else { return }   // Settings → Workshop
         workshopUpscaleTask = Task {
             // Runs off the main actor (a nonisolated async function) and stops when this task is cancelled.
             let upscaled = await PreviewUpscaler.upscale(frames)
@@ -1468,9 +1472,11 @@ final class AppModel {
                 sourceInfo = info
                 trimStart = 0
                 trimEnd = info.duration
-                // Smooth by default when it's cheap enough to matter; 60 fps sources stay as recorded.
-                motionMode = availableMotionModes.contains(.smooth) ? .smooth : .original
-                enhanceDetail = false   // opt-in for each video: it is slow
+                // The defaults from Settings → New Wallpapers (Smooth unless changed: 60 fps sources stay as recorded).
+                let motion = Preferences.defaultMotion
+                motionMode = availableMotionModes.contains(motion) ? motion : .original
+                smoothLoop = Preferences.defaultSeamlessLoop
+                enhanceDetail = Preferences.defaultEnhanceDetail   // off unless changed: it is slow
                 // Tell the user right away, not only in the window, when the video is too small for 4K.
                 if resolutionHint?.severe == true {
                     showResolutionAlert = true
@@ -1939,7 +1945,7 @@ final class AppModel {
     // MARK: - Temp files
 
     /// Temp folder for ffmpeg intermediates and transcodes (can be several GB). Never inside the aerials folder.
-    private static let workDirURL = FileManager.default.temporaryDirectory
+    static let workDirURL = FileManager.default.temporaryDirectory
         .appending(path: "AerialSwap", directoryHint: .isDirectory)
 
     private static func workDir() -> URL {
@@ -1953,6 +1959,12 @@ final class AppModel {
         downloader?.cancel()        // Discover downloads in the background (cancelBackgroundDownload)
         steamDownloader?.cancel()
         Self.removeWorkDir()
+        SteamDownload.quitIfStarted()
+    }
+
+    /// Settings → General → Delete. The work folder only while nothing uses it (a transcode, a background download).
+    func removeTemporaryData() {
+        TemporaryData.remove(workDir: isBusy || backgroundDownload != nil ? nil : Self.workDirURL)
     }
 
     private static func removeWorkDir() {

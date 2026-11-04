@@ -59,8 +59,9 @@ Own [Wallpaper Engine](https://www.wallpaperengine.io) on Steam? Under **Discove
 video wallpapers and click **Download with Steam**: your own Steam for Mac downloads it, no Windows needed.
 **Add Video → From Wallpaper Engine…** shows the video wallpapers your Steam already downloaded (also from CrossOver
 or Whisky). AerialSwap never sees your Steam login, and it can't use scene or web wallpapers. Once a wallpaper is in
-your library, AerialSwap removes the copy Steam downloaded for it (turn this off in Discover's menu); wallpapers you
-subscribed to in the Workshop yourself are never touched.
+your library, AerialSwap removes the copy Steam downloaded for it (turn this off in **Settings → Workshop**); wallpapers
+you subscribed to in the Workshop yourself are never touched. If AerialSwap had to start Steam, it quits Steam again
+when you quit AerialSwap, so Steam doesn't keep using power in the background.
 
 Downloading this way isn't an official Wallpaper Engine or Steam feature: AerialSwap asks your Steam app the way
 Wallpaper Engine itself does, and Steam shows you as playing Wallpaper Engine meanwhile. To keep it to normal use,
@@ -115,6 +116,17 @@ in 4K in the background (keep browsing meanwhile; the top bar shows the progress
 The menu at the end of the topics sorts (Popular, Newest) and filters (resolution, Pixabay's categories, hide videos
 already in your library); videos you already have say **In Library**.
 
+### Settings
+
+Press **⌘,** (or click the ⚙ button, then **Settings…**) to choose:
+
+- **General**: whether AerialSwap checks for updates once a day, and how much space its temporary files and caches
+  take (**Delete** frees it; your library isn't touched).
+- **New Wallpapers**: what a new video starts with: Motion, Seamless loop and Enhance detail.
+- **Workshop**: start Steam as soon as you open the Workshop (so downloads start sooner), quit Steam with AerialSwap
+  if AerialSwap started it, remove Steam's copy after saving, and when small previews are upscaled with Apple's ML
+  upscaler (always, only when plugged in, or never).
+
 ## Questions
 
 **Is it safe?**
@@ -134,7 +146,7 @@ Usually yes, but AerialSwap uses parts of macOS that Apple doesn't officially of
 can break it until a new version comes out. Your library always keeps your videos.
 
 **How do I get updates?**
-AerialSwap checks once a day and tells you when a new version is out. Click the ⚙ button in the top right, then
+AerialSwap checks once a day and tells you when a new version is out (you can turn that off in Settings). Click the ⚙ button in the top right, then
 **Update to AerialSwap …**: it downloads the update, checks that it really comes from AerialSwap, installs it and
 restarts.
 

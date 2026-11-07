@@ -120,12 +120,16 @@ public enum ShaderCompiler {
             var size = 0
             spvc_compiler_get_declared_struct_size(compiler, type, &size)
             uniformSize = size
-            uniformIndex = Int(spvc_compiler_msl_get_automatic_resource_binding(compiler, block.id))
+            let index = spvc_compiler_msl_get_automatic_resource_binding(compiler, block.id)
+            uniformIndex = index == UInt32.max ? nil : Int(index)
         }
         var textures: [String: (texture: Int, sampler: Int)] = [:]
         for texture in list(SPVC_RESOURCE_TYPE_SAMPLED_IMAGE) {
-            textures[String(cString: texture.name)] = (Int(spvc_compiler_msl_get_automatic_resource_binding(compiler, texture.id)),
-                                                       Int(spvc_compiler_msl_get_automatic_resource_binding_secondary(compiler, texture.id)))
+            // Textures the stage declares but never reads get no binding (~0).
+            let index = spvc_compiler_msl_get_automatic_resource_binding(compiler, texture.id)
+            let sampler = spvc_compiler_msl_get_automatic_resource_binding_secondary(compiler, texture.id)
+            guard index != UInt32.max, sampler != UInt32.max else { continue }
+            textures[String(cString: texture.name)] = (Int(index), Int(sampler))
         }
         var attributes: [String: Int] = [:]
         for input in list(SPVC_RESOURCE_TYPE_STAGE_INPUT) where spvc_compiler_get_execution_model(compiler) == SpvExecutionModelVertex {

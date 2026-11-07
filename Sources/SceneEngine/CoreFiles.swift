@@ -31,20 +31,21 @@ public enum CoreFiles {
                 #"{"passes": [{"shader": "genericimage2", "blending": "translucent", "textures": ["util/white"]}]}"#,
         ]
         for i in 0 ..< 16 { files["materials/util/solidlayer_instance_\(i).json"] = files["materials/util/solidlayer.json"] }
-        for name in ["genericimage", "genericimage2", "genericimage3", "genericimage4"] {
+        files["shaders/aerialswap/blendimage.vert"] = blendImageVert
+        files["shaders/aerialswap/blendimage.frag"] = blendImageFrag
+        for name in ["aerialswap/image", "genericimage", "genericimage2", "genericimage3", "genericimage4"] {
             files["shaders/\(name).vert"] = imageVert
             files["shaders/\(name).frag"] = imageFrag
         }
         return files
     }()
 
-    // MARK: - Base image shader
+    // MARK: - Image shaders
 
-    /// AerialSwap's image layer shader. The renderer sets `g_Texture0Transform` (the texture rectangle to show:
-    /// padding, sprite frame) and `g_Color4` (color × brightness, alpha).
+    /// AerialSwap's image layer shader, also the one layers are composited with. The renderer passes the texture
+    /// rectangle to show (padding, sprite frame) as texture coordinates and sets `g_Color4` (color × brightness, alpha).
     static let imageVert = """
         uniform mat4 g_ModelViewProjectionMatrix;
-        uniform vec4 g_Texture0Transform;
 
         attribute vec3 a_Position;
         attribute vec2 a_TexCoord;
@@ -53,7 +54,7 @@ public enum CoreFiles {
 
         void main() {
             gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
-            v_TexCoord = g_Texture0Transform.xy + a_TexCoord * g_Texture0Transform.zw;
+            v_TexCoord = a_TexCoord;
         }
         """
 
@@ -65,6 +66,42 @@ public enum CoreFiles {
 
         void main() {
             gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * g_Color4;
+        }
+        """
+
+    /// Composites a layer with a blend mode (`BLENDMODE`, as in `ApplyBlending`) over a copy of the scene behind it
+    /// (`g_Texture1`), which it reads where it lands on screen.
+    static let blendImageVert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+
+        varying vec2 v_TexCoord;
+        varying vec2 v_ScreenCoord;
+
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+            v_ScreenCoord = vec2(gl_Position.x / gl_Position.w * 0.5 + 0.5, 0.5 - gl_Position.y / gl_Position.w * 0.5);
+        }
+        """
+
+    static let blendImageFrag = """
+        // [COMBO] {"combo":"BLENDMODE","default":0}
+        #include "common_blending.h"
+
+        uniform sampler2D g_Texture0;
+        uniform sampler2D g_Texture1;
+        uniform vec4 g_Color4;
+
+        varying vec2 v_TexCoord;
+        varying vec2 v_ScreenCoord;
+
+        void main() {
+            vec4 layer = texSample2D(g_Texture0, v_TexCoord) * g_Color4;
+            vec4 behind = texSample2D(g_Texture1, v_ScreenCoord);
+            gl_FragColor = vec4(ApplyBlending(BLENDMODE, behind.rgb, layer.rgb, layer.a), behind.a);
         }
         """
 
@@ -104,7 +141,7 @@ public enum CoreFiles {
         """
 
     /// Photoshop-style blend modes. `ApplyBlending(mode, base, blend, opacity)` takes the editor's blend mode index,
-    /// in the order Wallpaper Engine's editor lists them.
+    /// in the order Wallpaper Engine's editor lists them; other indices (the tint effect defaults to 30) mix normally.
     static let blendingH = """
         #ifndef AS_BLENDING_H
         #define AS_BLENDING_H
@@ -186,7 +223,6 @@ public enum CoreFiles {
             else if (mode == 27) r = BlendLuminosity(a, b);
             else if (mode == 28) r = BlendDarkerColor(a, b);
             else if (mode == 29) r = BlendLighterColor(a, b);
-            else if (mode == 30) r = BlendAdd(a, b);
             return mix(a, r, opacity);
         }
         #endif

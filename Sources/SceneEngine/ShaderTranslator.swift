@@ -94,6 +94,7 @@ public enum ShaderTranslator {
             nextLocation += max(1, v.count) * (v.type.hasPrefix("mat") ? Int(String(v.type.last ?? "4")) ?? 4 : 1)
         }
         let extra = fragmentVaryings.filter { v in !vertexVaryings.contains { $0.name == v.name } }
+        let vertexTypes = Dictionary(vertexVaryings.map { ($0.name, $0.type) }, uniquingKeysWith: { first, _ in first })
 
         var attributes: [String: Int] = [:]
         for (_, name, _) in declarations(of: "attribute", in: vertex) where attributes[name] == nil {
@@ -110,7 +111,15 @@ public enum ShaderTranslator {
                 // HLSL lets a fragment shader change its inputs, so those it assigns to are copied into globals of the
                 // same name.
                 let assigned = #"\b\#(name)\s*(\.\w+)?\s*(\[[^\]]*\])?\s*([-+*/]?=(?!=)|\+\+|--)"#
-                guard source.range(of: assigned, options: .regularExpression) != nil else { return "\(location) in \(type) \(name)\(suffix);" }
+                guard source.range(of: assigned, options: .regularExpression) != nil else {
+                    // Metal only links matching types, HLSL truncates or pads: the fragment reads the vertex
+                    // stage's type through a macro.
+                    if suffix.isEmpty, let vertexType = vertexTypes[name], vertexType != type,
+                       let converted = convert("as_in_" + name, from: vertexType, to: type) {
+                        return "\(location) in \(vertexType) as_in_\(name);\n#define \(name) \(converted)\n"
+                    }
+                    return "\(location) in \(type) \(name)\(suffix);"
+                }
                 inputs.append(name)
                 return "\(location) in \(type) as_in_\(name)\(suffix); \(type) \(name)\(suffix);"
             }
@@ -375,6 +384,14 @@ public enum ShaderTranslator {
 
     static let reservedWords = ["sample", "input", "output", "filter", "active", "common", "partition", "noise", "buffer",
                                 "shared", "resource", "subroutine", "precise", "coherent", "superp", "packed"]
+
+    /// `value` (a float or vector of type `from`) as type `to`: extra components dropped, missing ones zero.
+    private static func convert(_ value: String, from: String, to: String) -> String? {
+        func size(_ type: String) -> Int? { type == "float" ? 1 : type.hasPrefix("vec") ? Int(type.dropFirst(3)) : nil }
+        guard let a = size(from), let b = size(to) else { return nil }
+        if b < a { return "(\(value).\("xyzw".prefix(b)))" }
+        return "\(to)(\(value)\(String(repeating: ", 0.0", count: b - a)))"
+    }
 
     /// `varying vec2 a, b[4];` → (type, name, array count: 0 when not an array).
     private static func declarations(of keyword: String, in source: String) -> [(type: String, name: String, count: Int)] {

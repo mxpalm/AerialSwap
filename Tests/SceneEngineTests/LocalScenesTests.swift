@@ -88,3 +88,34 @@ import Metal
         for f in failures { print("  " + f.replacingOccurrences(of: "\n", with: " | ")) }
     }
 }
+
+import ImageIO
+import UniformTypeIdentifiers
+
+/// A frame of every local scene. With `SCENE_RENDER_DIR` set, the frames are written there as PNGs (next to a copy of
+/// each scene's preview) for comparing by eye.
+@Suite struct LocalRenderTests {
+    @Test(.enabled(if: !LocalScenesTests.scenes.isEmpty), arguments: LocalScenesTests.scenes)
+    func frameRenders(_ folder: URL) throws {
+        let project = try SceneProject(folder: folder)
+        let files = try SceneFiles(folder: folder, entry: project.file)
+        let document = try SceneDocument(files: files, project: project)
+        let width = 1920, height = Int((1920 * document.general.height / document.general.width).rounded())
+        let renderer = try SceneRenderer(document: document, files: files, width: width, height: height)
+        let image = try renderer.image(time: ProcessInfo.processInfo.environment["SCENE_RENDER_TIME"].flatMap(Double.init) ?? 1)
+        print("\(folder.lastPathComponent) “\(project.title)”: problems \(renderer.problems)")
+
+        guard let dir = ProcessInfo.processInfo.environment["SCENE_RENDER_DIR"] else { return }
+        let base = URL(fileURLWithPath: dir).appending(path: folder.lastPathComponent)
+        let destination = try #require(CGImageDestinationCreateWithURL(base.appendingPathExtension("png") as CFURL,
+                                                                       UTType.png.identifier as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        #expect(CGImageDestinationFinalize(destination))
+        if let preview = project.preview {
+            let source = folder.appending(path: preview)
+            let copy = URL(fileURLWithPath: dir).appending(path: folder.lastPathComponent + "_preview." + source.pathExtension)
+            try? FileManager.default.removeItem(at: copy)
+            try? FileManager.default.copyItem(at: source, to: copy)
+        }
+    }
+}

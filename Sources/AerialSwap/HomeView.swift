@@ -280,10 +280,14 @@ private struct LibraryPanel: View {
         VStack(spacing: 8) {
             if model.libraryItems.isEmpty {
                 AddVideoMenu(model: model, height: 44, fullWidth: true)
+            } else if model.isUsingLibrary && model.isSelectedItemPlaying {
+                Button("Refresh Wallpaper") { model.refreshWallpaper() }
+                    .buttonStyle(PillButtonStyle(kind: .primary, height: 44, fullWidth: true))
+                    .disabled(!model.canRefreshWallpaper)
+                    .keyboardShortcut(model.done == nil && !isPreviewing ? .defaultAction : nil)
+                Text(footerCaption).font(.system(size: 12)).foregroundStyle(Theme.secondary)
             } else {
-                Button(model.isSelectedItemPlaying ? "Playing on Desktop" : "Set as Wallpaper") {
-                    model.confirmSetWallpaper = true
-                }
+                Button("Set as Wallpaper") { model.confirmSetWallpaper = true }
                 .buttonStyle(PillButtonStyle(kind: .primary, height: 44, fullWidth: true))
                 .disabled(!model.canSetWallpaper)
                 .keyboardShortcut(model.done == nil && !isPreviewing ? .defaultAction : nil)
@@ -296,7 +300,7 @@ private struct LibraryPanel: View {
 
     private var footerCaption: String {
         if model.selectedLibraryItem == nil { return "Pick a wallpaper above" }
-        if model.isSelectedItemPlaying { return "Already on your desktop · pick another wallpaper" }
+        if model.isSelectedItemPlaying { return "On your desktop · refresh it if it looks wrong, e.g. black" }
         return "Desktop & screen saver · already prepared, takes a few seconds"
     }
 }

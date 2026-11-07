@@ -299,6 +299,8 @@ final class AppModel {
     var canSetWallpaper: Bool {
         !isBusy && (sourceInfo != nil || isUsingLibrary) && !(isUsingLibrary && isSelectedItemPlaying)
     }
+    /// The chosen library wallpaper is on the desktop; Refresh puts it in place again (see `refreshWallpaper`).
+    var canRefreshWallpaper: Bool { !isBusy && isUsingLibrary && isSelectedItemPlaying }
     /// The chosen library wallpaper is already on the desktop, so using it again would change nothing.
     var isSelectedItemPlaying: Bool { selectedLibraryItem.map { $0.id == desktopID } ?? false }
     var libraryBytes: Int64 { libraryItems.reduce(0) { $0 + $1.bytes } }
@@ -1873,6 +1875,30 @@ final class AppModel {
                         notice = Notice(kind: .success, text: "“\(name)” is now your \(role).")
                     }
                 }
+            } catch {
+                fail(error)
+            }
+            stopProgress()
+            refreshAssets()
+        }
+    }
+
+    /// For when the wallpaper on the desktop looks wrong (e.g. black): copies its video and thumbnails into the aerials
+    /// folder again, sets it once more for the roles it has, and restarts WallpaperAgent.
+    func refreshWallpaper() {
+        guard canRefreshWallpaper, let item = selectedLibraryItem else { return }
+        isBusy = true; workFlow = .quick; phase = "Refreshing"; notice = nil
+        let group = group, store = store, items = libraryItems, idle = idleID == item.id
+        let name = prettyName(item.name)
+        Task {
+            do {
+                try await Task.detached {
+                    try await group.sync(items, restart: false, replacing: item.id)
+                    // Restarts WallpaperAgent itself when it switched anything.
+                    if try store.setSelection(item.id, desktop: true, idle: idle) == 0 { store.restartWallpaperAgent() }
+                }.value
+                Log.info("Group: refreshed \(item.name) (\(item.id))")
+                notice = Notice(kind: .success, text: "“\(name)” was put in place again.")
             } catch {
                 fail(error)
             }

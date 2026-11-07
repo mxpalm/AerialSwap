@@ -34,8 +34,9 @@ struct AerialGroup: Sendable {
     /// Makes the group match `items`: adds missing videos and thumbnails, rewrites entries.json when it differs, and
     /// deletes our files for items that are gone. Restarts WallpaperAgent when anything changed (unless `restart` is
     /// false). Returns whether anything changed. With no items, Apple's manifest is put back as it was.
+    /// The item with the ID `replacing` gets fresh copies of its video and thumbnails even when they look right.
     @discardableResult
-    func sync(_ items: [LibraryItem], restart: Bool = true) async throws -> Bool {
+    func sync(_ items: [LibraryItem], restart: Bool = true, replacing replaced: String? = nil) async throws -> Bool {
         let fm = FileManager.default
         guard fm.fileExists(atPath: store.entriesURL.path) else {
             throw StoreError.aerialsFolderMissing(store.entriesURL.deletingLastPathComponent().path)
@@ -48,15 +49,18 @@ struct AerialGroup: Sendable {
         var published: [LibraryItem] = []
         for item in items where fm.fileExists(atPath: library.videoURL(item).path) {
             do {
-                if try placeVideo(of: item) { changed = true }
-                if await placeThumbnail(of: item) { changed = true }
+                if try placeVideo(of: item, force: item.id == replaced) {
+                    changed = true
+                    Log.info("Group: placed \(item.id).mov")
+                }
+                if await placeThumbnail(of: item, force: item.id == replaced) { changed = true }
                 published.append(item)
             } catch {
                 Log.error("Group: could not add \(item.name) (\(item.id)): \(error.localizedDescription)")
             }
         }
 
-        if let first = published.first, placeGroupPreview(of: first) { changed = true }
+        if let first = published.first, placeGroupPreview(of: first, force: first.id == replaced) { changed = true }
 
         let desired = published.isEmpty ? apple : manifest(apple, with: published)
         if !NSDictionary(dictionary: current).isEqual(to: desired) {
@@ -177,21 +181,21 @@ struct AerialGroup: Sendable {
 
     // MARK: - Files
 
-    /// Clones the library video into videos/<id>.mov unless it's already there. Returns whether it copied.
-    private func placeVideo(of item: LibraryItem) throws -> Bool {
+    /// Clones the library video into videos/<id>.mov unless it's already there (or `force`). Returns whether it copied.
+    private func placeVideo(of item: LibraryItem, force: Bool = false) throws -> Bool {
         let source = library.videoURL(item)
         let live = store.videosDir.appending(path: "\(item.id).mov")
         let url = Self.videoSource(item.id)
-        if store.xattrString(live, "SourceURL") == url, store.fileSize(live) == store.fileSize(source) { return false }
+        if !force, store.xattrString(live, "SourceURL") == url, store.fileSize(live) == store.fileSize(source) { return false }
         try place(source, at: live, sourceURL: url)
         return true
     }
 
-    /// Saves a frame of the video as thumbnails/<id>.png (the tile in System Settings) unless it's already there.
-    private func placeThumbnail(of item: LibraryItem) async -> Bool {
+    /// Saves a frame of the video as thumbnails/<id>.png (the tile in System Settings) unless it's already there (or `force`).
+    private func placeThumbnail(of item: LibraryItem, force: Bool = false) async -> Bool {
         let live = thumbnailsDir.appending(path: "\(item.id).png")
         let url = Self.thumbnailSource(item.id)
-        if store.xattrString(live, "SourceURL") == url { return false }
+        if !force, store.xattrString(live, "SourceURL") == url { return false }
         // Apple's thumbnails are 214x130; twice that for Retina.
         let frame = await WallpaperLibrary.middleFrame(of: library.videoURL(item), maxSize: CGSize(width: 428, height: 260))
         let image = frame ?? NSImage(contentsOf: library.thumbnailURL(item))?.cgImage(forProposedRect: nil, context: nil, hints: nil)
@@ -213,11 +217,11 @@ struct AerialGroup: Sendable {
 
     /// The group's tile in System Settings: the extension keeps a subcategory's preview image as
     /// thumbnails/<subcategory id>.png (it doesn't reuse the asset's), so the first wallpaper's thumbnail is copied there.
-    private func placeGroupPreview(of item: LibraryItem) -> Bool {
+    private func placeGroupPreview(of item: LibraryItem, force: Bool = false) -> Bool {
         let live = thumbnailsDir.appending(path: "\(Self.subcategoryID).png")
         let url = Self.thumbnailSource(item.id)
         let source = thumbnailsDir.appending(path: "\(item.id).png")
-        guard store.xattrString(live, "SourceURL") != url, FileManager.default.fileExists(atPath: source.path) else { return false }
+        guard force || store.xattrString(live, "SourceURL") != url, FileManager.default.fileExists(atPath: source.path) else { return false }
         do {
             try place(source, at: live, sourceURL: url)
             return true

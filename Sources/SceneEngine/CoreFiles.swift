@@ -31,6 +31,10 @@ public enum CoreFiles {
                 #"{"passes": [{"shader": "genericimage2", "blending": "translucent", "textures": ["util/white"]}]}"#,
         ]
         for i in 0 ..< 16 { files["materials/util/solidlayer_instance_\(i).json"] = files["materials/util/solidlayer.json"] }
+        for name in ["aerialswap/particle", "genericparticle"] {
+            files["shaders/\(name).vert"] = particleVert
+            files["shaders/\(name).frag"] = particleFrag
+        }
         files["shaders/aerialswap/blendimage.vert"] = blendImageVert
         files["shaders/aerialswap/blendimage.frag"] = blendImageFrag
         for name in ["aerialswap/image", "genericimage", "genericimage2", "genericimage3", "genericimage4"] {
@@ -66,6 +70,37 @@ public enum CoreFiles {
 
         void main() {
             gl_FragColor = texSample2D(g_Texture0, v_TexCoord) * g_Color4;
+        }
+        """
+
+    /// Particles: the renderer builds each one's quad in scene units, with its color and alpha per vertex.
+    static let particleVert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        attribute vec4 a_Color;
+
+        varying vec2 v_TexCoord;
+        varying vec4 v_Color;
+
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+            v_Color = a_Color;
+        }
+        """
+
+    static let particleFrag = """
+        uniform sampler2D g_Texture0;
+        uniform float g_Overbright; // {"material":"ui_editor_properties_overbright","default":1}
+
+        varying vec2 v_TexCoord;
+        varying vec4 v_Color;
+
+        void main() {
+            vec4 color = texSample2D(g_Texture0, v_TexCoord) * v_Color;
+            gl_FragColor = vec4(color.rgb * g_Overbright, color.a);
         }
         """
 

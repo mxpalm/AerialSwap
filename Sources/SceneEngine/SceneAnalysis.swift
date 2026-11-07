@@ -32,6 +32,7 @@ public struct SceneAnalysis: Sendable, Equatable {
             }
         }
         if document.general.bloom { leftOut["bloom (glow)", default: 0] += 1 }
+        if document.scriptedValues > 0 { leftOut["scripted changes (time of day, clocks, colors)", default: 0] += document.scriptedValues }
         if document.general.cameraParallax { leftOut["mouse parallax", default: 0] += 1 }
         let missingShaders = document.missingFiles.filter { $0.hasPrefix("effects/") || $0.hasPrefix("shaders/") }
         if !missingShaders.isEmpty { leftOut["effects AerialSwap doesn't have", default: 0] += missingShaders.count }

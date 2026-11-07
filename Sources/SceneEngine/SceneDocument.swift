@@ -92,6 +92,19 @@ public struct SceneDocument: Sendable {
 
     public struct Material: Sendable {
         public var passes: [MaterialPass]
+
+        init(passes: [MaterialPass]) { self.passes = passes }
+
+        /// A material file's passes (bindings already resolved).
+        init(json: SceneJSON) {
+            passes = (json["passes"]?.array ?? []).prefix(SceneLimits.maxPasses).map { p in
+                MaterialPass(
+                    shader: p["shader"]?.string ?? "genericimage2", blending: p["blending"]?.string ?? "normal",
+                    textures: (p["textures"]?.array ?? []).map(\.string),
+                    combos: (p["combos"]?.object ?? [:]).compactMapValues { $0.number.map { Int($0) } },
+                    constants: p["constantshadervalues"]?.object ?? [:], userTextures: p["usertextures"]?.object ?? [:])
+            }
+        }
     }
 
     public struct MaterialPass: Sendable {
@@ -141,6 +154,8 @@ public struct SceneDocument: Sendable {
     public let properties: [String: SceneJSON]
     /// Files the scene names that neither the wallpaper nor AerialSwap's core has.
     public let missingFiles: Set<String>
+    /// Values a SceneScript computes (`{"script": …, "value": …}`); they keep their saved value.
+    public let scriptedValues: Int
 
     /// Loads `project.file` (normally scene.json) and everything it references. `overrides` replace the project's
     /// property values (the user's choices in AerialSwap).
@@ -148,7 +163,9 @@ public struct SceneDocument: Sendable {
         self.project = project
         let properties = project.values.merging(overrides) { _, new in new }
         self.properties = properties
-        let scene = try files.json(project.file).resolvedDeep(properties)
+        let raw = try files.json(project.file)
+        scriptedValues = raw.count { $0["script"] != nil }
+        let scene = raw.resolvedDeep(properties)
         var loader = Loader(files: files, properties: properties)
 
         var general = General()
@@ -254,15 +271,7 @@ public struct SceneDocument: Sendable {
         }
 
         mutating func material(_ path: String) -> Material? {
-            guard let json = json(path) else { return nil }
-            let passes = (json["passes"]?.array ?? []).prefix(SceneLimits.maxPasses).map { p in
-                MaterialPass(
-                    shader: p["shader"]?.string ?? "genericimage2", blending: p["blending"]?.string ?? "normal",
-                    textures: (p["textures"]?.array ?? []).map(\.string),
-                    combos: (p["combos"]?.object ?? [:]).compactMapValues { $0.number.map { Int($0) } },
-                    constants: p["constantshadervalues"]?.object ?? [:], userTextures: p["usertextures"]?.object ?? [:])
-            }
-            return Material(passes: Array(passes))
+            json(path).map(Material.init(json:))
         }
 
         /// Overrides an effect instance or image instance makes on a material pass.
@@ -309,6 +318,16 @@ public struct SceneDocument: Sendable {
 }
 
 extension SceneJSON {
+    /// How many values at or below this one match.
+    func count(where matches: (SceneJSON) -> Bool) -> Int {
+        let own = matches(self) ? 1 : 0
+        switch self {
+        case .object(let dictionary): return own + dictionary.values.reduce(0) { $0 + $1.count(where: matches) }
+        case .array(let array): return own + array.reduce(0) { $0 + $1.count(where: matches) }
+        default: return own
+        }
+    }
+
     /// The value with every property binding inside it resolved, all the way down.
     func resolvedDeep(_ properties: [String: SceneJSON]) -> SceneJSON {
         let value = resolved(properties)

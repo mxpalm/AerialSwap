@@ -45,6 +45,16 @@ final class GPUTexture {
             if t < f.duration { break }
             t -= f.duration
         }
+        return rectangle(of: frame)
+    }
+
+    /// Sprite-sheet frame `index` (wrapping), or the whole image when there are no frames.
+    func frame(index: Int) -> (texture: MTLTexture, rect: SIMD4<Float>) {
+        guard !frames.isEmpty else { return frame(at: 0) }
+        return rectangle(of: frames[((index % frames.count) + frames.count) % frames.count])
+    }
+
+    private func rectangle(of frame: SceneTexture.Frame) -> (texture: MTLTexture, rect: SIMD4<Float>) {
         let texture = images[min(frame.image, images.count - 1)]
         let w = Float(texture.width), h = Float(texture.height)
         return (texture, SIMD4(Float(frame.x) / w, Float(frame.y) / h, Float(frame.width) / w, Float(frame.height) / h))
@@ -60,6 +70,8 @@ final class TextureStore {
     private var cache: [String: GPUTexture?] = [:]
     /// Textures that couldn't be loaded, with why.
     private(set) var problems: [String: String] = [:]
+    /// Wallpaper Engine's built-in textures drawn by AerialSwap instead (particle shapes the package doesn't carry).
+    private(set) var substituted: Set<String> = []
 
     init(device: MTLDevice, queue: MTLCommandQueue, files: SceneFiles) {
         self.device = device
@@ -81,6 +93,9 @@ final class TextureStore {
             }
         } else if let utility = utility(name) {
             texture = utility
+        } else if name.hasPrefix("particle/"), let shape = particle(name) {
+            texture = shape
+            substituted.insert(name)
         } else {
             problems[name] = "missing"
         }
@@ -188,6 +203,57 @@ final class TextureStore {
             pixels(256, 1) { x, _, _ in let v = UInt8(x); return [v, v, v, 255] }
         default: nil
         }
+    }
+
+    /// A stand-in for one of Wallpaper Engine's particle textures, by what its name says it is: fog and smoke are soft
+    /// noisy clouds, drops and rain are streaks, leaves are leaves, halos are rings, and anything else is a soft dot.
+    private func particle(_ name: String) -> GPUTexture? {
+        let n = name.lowercased()
+        let size = 128
+        func shape(_ alpha: @escaping (Float, Float) -> Float, color: @escaping (Float, Float) -> SIMD3<Float> = { _, _ in .one }) -> GPUTexture? {
+            pixels(size, size) { x, y, _ in
+                // -1…1 across the texture.
+                let u = (Float(x) + 0.5) / Float(size) * 2 - 1, v = (Float(y) + 0.5) / Float(size) * 2 - 1
+                let a = min(max(alpha(u, v), 0), 1), c = color(u, v)
+                return [UInt8(min(max(c.x, 0), 1) * 255), UInt8(min(max(c.y, 0), 1) * 255), UInt8(min(max(c.z, 0), 1) * 255), UInt8(a * 255)]
+            }
+        }
+        if ["fog", "cloud", "smoke", "mist", "vapor", "steam", "dust"].contains(where: n.contains) {
+            var lattice: [Float] = []
+            var random = RandomSource(seed: 77)
+            for _ in 0 ..< 16 * 16 { lattice.append(random.next()) }
+            func noise(_ x: Float, _ y: Float, _ cells: Int) -> Float {
+                let fx = (x * 0.5 + 0.5) * Float(cells), fy = (y * 0.5 + 0.5) * Float(cells)
+                let ix = Int(fx), iy = Int(fy), tx = fx - Float(ix), ty = fy - Float(iy)
+                func at(_ i: Int, _ j: Int) -> Float { lattice[(j % cells) * 16 + (i % cells)] }
+                let sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty)
+                let top = at(ix, iy) + (at(ix + 1, iy) - at(ix, iy)) * sx
+                return top + (at(ix, iy + 1) + (at(ix + 1, iy + 1) - at(ix, iy + 1)) * sx - top) * sy
+            }
+            return shape { u, v in
+                let falloff = max(0, 1 - (u * u + v * v))
+                let cloud = noise(u, v, 4) * 0.55 + noise(u, v, 8) * 0.3 + noise(u, v, 16) * 0.15
+                return falloff * falloff * (0.35 + cloud)
+            }
+        }
+        if ["drop", "rain", "streak", "line"].contains(where: n.contains) {
+            return shape { u, v in max(0, 1 - abs(u) * 6) * max(0, 1 - v * v) }
+        }
+        if ["leaf", "leaves", "petal"].contains(where: n.contains) {
+            // A pointed leaf along the diagonal with a darker middle vein.
+            return shape({ u, v in
+                let a = (u + v) * 0.7071, b = (v - u) * 0.7071
+                let width = 0.45 * max(0, 1 - a * a)
+                return (abs(b) < width ? 1 : 0) * (abs(a) < 0.95 ? 1 : 0)
+            }, color: { u, v in
+                let b = (v - u) * 0.7071
+                return SIMD3(0.85, 0.45, 0.12) * (abs(b) < 0.03 ? 0.6 : 1)
+            })
+        }
+        if n.contains("halo") || n.contains("ring") {
+            return shape { u, v in let r = (u * u + v * v).squareRoot(); return max(0, 1 - abs(r - 0.8) * 8) }
+        }
+        return shape { u, v in let r = min(1, (u * u + v * v).squareRoot()); return (1 - r) * (1 - r) }
     }
 
     private func solid(_ color: [UInt8]) -> GPUTexture {

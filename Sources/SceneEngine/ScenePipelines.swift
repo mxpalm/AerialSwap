@@ -37,17 +37,19 @@ final class ScenePipeline {
     }
 }
 
-/// The vertex every pass draws with: a position (layer units, or clip space for passes into a layer's buffers) and a
-/// texture coordinate. Attributes a shader declares beyond these read as constants (see `PipelineCache`).
+/// The vertex every pass draws with: a position (layer units, or clip space for passes into a layer's buffers), a
+/// texture coordinate and a color (particles'). Attributes a shader declares beyond these read as constants (see
+/// `PipelineCache`).
 struct SceneVertex {
     var position: SIMD3<Float>
     var texCoord: SIMD2<Float>
+    var color = SIMD4<Float>.one
 }
 
 /// Compiles scene shaders once per variant (shader, combos) and makes pipeline states per blending and target format.
 final class PipelineCache {
     static let vertexBufferIndex = 30
-    /// Constant values for attributes the renderer doesn't feed: zero, or white for `a_Color`.
+    /// Constant zeros for attributes the renderer doesn't feed.
     static let constantBufferIndex = 29
 
     let device: MTLDevice
@@ -60,7 +62,7 @@ final class PipelineCache {
     init(device: MTLDevice, files: SceneFiles) {
         self.device = device
         self.files = files
-        let values: [Float] = [0, 0, 0, 0, 1, 1, 1, 1]
+        let values: [Float] = [0, 0, 0, 0]
         constants = device.makeBuffer(bytes: values, length: values.count * 4)!
     }
 
@@ -140,17 +142,22 @@ final class PipelineCache {
                 attribute.format = .float2
                 attribute.offset = MemoryLayout<SceneVertex>.offset(of: \.texCoord)!
                 attribute.bufferIndex = vertexBufferIndex
+            case "a_Color":
+                attribute.format = .float4
+                attribute.offset = MemoryLayout<SceneVertex>.offset(of: \.color)!
+                attribute.bufferIndex = vertexBufferIndex
             default:
                 attribute.format = .float4
-                attribute.offset = name == "a_Color" ? 16 : 0
+                attribute.offset = 0
                 attribute.bufferIndex = constantBufferIndex
             }
         }
         // Metal rejects layouts no attribute uses.
-        if attributes.keys.contains(where: { $0 == "a_Position" || $0 == "a_TexCoord" }) {
+        let fed: Set<String> = ["a_Position", "a_TexCoord", "a_Color"]
+        if attributes.keys.contains(where: fed.contains) {
             descriptor.layouts[vertexBufferIndex].stride = MemoryLayout<SceneVertex>.stride
         }
-        if attributes.keys.contains(where: { $0 != "a_Position" && $0 != "a_TexCoord" }) {
+        if attributes.keys.contains(where: { !fed.contains($0) }) {
             descriptor.layouts[constantBufferIndex].stepFunction = .constant
             descriptor.layouts[constantBufferIndex].stepRate = 0
             descriptor.layouts[constantBufferIndex].stride = 16

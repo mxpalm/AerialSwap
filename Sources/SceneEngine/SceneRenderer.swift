@@ -3,7 +3,8 @@ import Foundation
 import Metal
 import simd
 
-/// Draws a scene's frames with Metal. Image layers draw in scene order onto the canvas, scaled to fill the output.
+/// Draws a scene's frames with Metal. Image layers and particle systems draw in scene order onto the canvas, scaled
+/// to fill the output.
 /// A layer without effects draws straight onto the scene; one with effects is drawn into a buffer of its own size,
 /// runs its effects' passes there (ping-ponging between two buffers, plus the buffers effects declare), and the result
 /// is composited onto the scene with the layer's blending, color and alpha.
@@ -24,7 +25,8 @@ public final class SceneRenderer {
     private let target: MTLTexture
     private let background: MTLTexture
     private let projection: simd_float4x4
-    private let layers: [Layer]
+    private let items: [Item]
+    private var particleMaterials: [String: SceneDocument.MaterialPass?] = [:]
     private var pool: [SIMD2<Int>: [MTLTexture]] = [:]
     private var samplers: [Int: MTLSamplerState] = [:]
     private var issues: Set<String>
@@ -70,11 +72,23 @@ public final class SceneRenderer {
             SIMD4(0, 0, 1e-6, 0), SIMD4(-w * scale / Float(width), -h * scale / Float(height), 0.5, 1)))
 
         var issues = Set<String>()
-        layers = Self.layers(of: document, issues: &issues)
+        items = Self.items(of: document, files: files, issues: &issues)
         self.issues = issues
     }
 
-    // MARK: - Layers
+    // MARK: - Layers and particle systems
+
+    private enum Item {
+        case layer(Layer)
+        case particles(Particles)
+    }
+
+    private struct Particles {
+        let name: String
+        let system: ParticleSystem
+        /// System units → scene units.
+        let world: simd_float4x4
+    }
 
     private struct Layer {
         let id: Int
@@ -94,7 +108,7 @@ public final class SceneRenderer {
         let isReferenced: Bool
     }
 
-    private static func layers(of document: SceneDocument, issues: inout Set<String>) -> [Layer] {
+    private static func items(of document: SceneDocument, files: SceneFiles, issues: inout Set<String>) -> [Item] {
         let byID = Dictionary(document.objects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         func local(_ t: SceneDocument.Transform) -> simd_float4x4 {
             let c = Float(cos(t.angles.z)), s = Float(sin(t.angles.z))
@@ -128,8 +142,7 @@ public final class SceneRenderer {
             }
         }
 
-        var layers: [Layer] = []
-        var particles = 0
+        var items: [Item] = []
         for object in document.objects {
             switch object.kind {
             case .image(let image):
@@ -152,21 +165,27 @@ public final class SceneRenderer {
                 let effects = image.effects.filter { $0.visible && !$0.passes.isEmpty }
                 let names = reads[object.id] ?? []
                 let compose = image.model.compose
-                layers.append(Layer(
+                items.append(.layer(Layer(
                     id: object.id, name: object.name, image: image, world: world,
                     corners: [SIMD2(left, bottom + h), SIMD2(left + w, bottom + h), SIMD2(left, bottom), SIMD2(left + w, bottom)],
                     size: SIMD2(min(8192, max(1, Int(size.x.rounded()))), min(8192, max(1, Int(size.y.rounded())))),
                     compose: compose, effects: effects,
                     needsBackground: (compose && !effects.isEmpty) || image.colorBlendMode != 0 || names.contains("_rt_FullFrameBuffer"),
-                    isReferenced: referenced.contains(object.id)))
-            case .particle:
-                particles += 1
+                    isReferenced: referenced.contains(object.id))))
+            case .particle(let particle):
+                let (world, visible) = placement(object)
+                guard visible else { continue }
+                let system = ParticleSystem(definition: particle.definition, overrides: .init(particle.instanceOverride),
+                                            seed: UInt64(UInt32(truncatingIfNeeded: object.id)) &+ 1) { path in
+                    (try? files.json(path))?.resolvedDeep(document.properties)
+                }
+                for feature in system.unsupported { issues.insert("Particles “\(object.name)”: \(feature) isn't simulated") }
+                items.append(.particles(Particles(name: object.name, system: system, world: world)))
             default:
                 break
             }
         }
-        if particles > 0 { issues.insert("Particle systems aren't drawn yet (\(particles))") }
-        return layers
+        return items
     }
 
     // MARK: - Frames
@@ -178,7 +197,14 @@ public final class SceneRenderer {
         let c = document.general.clearColor
         let frame = Frame(commands: commands, target: target,
                           clear: MTLClearColor(red: Double(c.x), green: Double(c.y), blue: Double(c.z), alpha: 1))
-        for layer in layers { draw(layer, time: time, frame: frame) }
+        for item in items {
+            switch item {
+            case .layer(let layer): draw(layer, time: time, frame: frame)
+            case .particles(let particles):
+                particles.system.advance(to: time)
+                draw(particles.system, name: particles.name, world: particles.world, time: time, frame: frame)
+            }
+        }
         _ = frame.scene()
         frame.endScene()
         composites.values.forEach(give)
@@ -391,6 +417,91 @@ public final class SceneRenderer {
         return (texture, binding, rectangle(rect))
     }
 
+    // MARK: - Drawing particles
+
+    /// Draws a system's particles as quads in scene units (sprites turned by their rotation, trails along their
+    /// velocity), then its children.
+    private func draw(_ system: ParticleSystem, name: String, world: simd_float4x4, time: Double, frame: Frame) {
+        defer {
+            for child in system.children {
+                let offset = simd_float4x4(columns: (SIMD4(1, 0, 0, 0), SIMD4(0, 1, 0, 0), SIMD4(0, 0, 1, 0), SIMD4(child.origin, 1)))
+                draw(child.system, name: name, world: world * offset, time: time, frame: frame)
+            }
+        }
+        let sprites = system.sprites()
+        guard !sprites.isEmpty, !system.renderers.isEmpty else { return }
+        guard let path = system.materialPath, let material = particleMaterial(path),
+              let textureName = material.textures.first ?? nil, let texture = textures.texture(textureName) else {
+            issues.insert("Particles “\(name)” have no material or texture")
+            return
+        }
+        // Refraction bends the scene behind through a normal map; drawn plainly it would show the map itself.
+        if material.combos["REFRACT"] == 1 {
+            issues.insert("Particles “\(name)”: refraction isn't drawn")
+            return
+        }
+        guard files.isCore("shaders/\(material.shader).vert") else {
+            issues.insert("Particles “\(name)”: shader \(material.shader) isn't supported")
+            return
+        }
+
+        let frameCount = max(1, texture.frames.count)
+        var vertices: [SceneVertex] = []
+        vertices.reserveCapacity(sprites.count * 6 * system.renderers.count)
+        for renderer in system.renderers {
+            for sprite in sprites {
+                let index = switch system.animation {
+                case .randomFrame: sprite.frame
+                case .sequence(let multiplier): Int((sprite.life * multiplier).truncatingRemainder(dividingBy: 1) * Float(frameCount))
+                }
+                let rect = texture.frames.isEmpty ? texture.frame(at: 0).rect : texture.frame(index: index).rect
+                // The quad's half axes: across and along.
+                let half = sprite.size / 2
+                var across: SIMD2<Float>, along: SIMD2<Float>
+                switch renderer {
+                case .sprite:
+                    let c = cos(sprite.rotation), s = sin(sprite.rotation)
+                    across = SIMD2(c, s) * half
+                    along = SIMD2(-s, c) * half
+                case .trail(let length, let minimum, let maximum):
+                    let velocity = SIMD2(sprite.velocity.x, sprite.velocity.y)
+                    let speed = simd_length(velocity)
+                    let direction = speed > 1e-4 ? velocity / speed : SIMD2<Float>(0, 1)
+                    across = SIMD2(direction.y, -direction.x) * half
+                    along = direction * half * min(max(speed * length, minimum), maximum)
+                }
+                let center = SIMD2(sprite.position.x, sprite.position.y)
+                func corner(_ x: Float, _ y: Float, _ uv: SIMD2<Float>) -> SceneVertex {
+                    let local: SIMD2<Float> = center + across * x + along * y
+                    let p: SIMD4<Float> = world * SIMD4<Float>(local.x, local.y, sprite.position.z, 1)
+                    return SceneVertex(position: SIMD3(p.x, p.y, p.z), texCoord: uv, color: sprite.color)
+                }
+                let topLeft = corner(-1, 1, SIMD2(rect.x, rect.y)), topRight = corner(1, 1, SIMD2(rect.x + rect.z, rect.y))
+                let bottomLeft = corner(-1, -1, SIMD2(rect.x, rect.y + rect.w)), bottomRight = corner(1, -1, SIMD2(rect.x + rect.z, rect.y + rect.w))
+                vertices += [topLeft, topRight, bottomLeft, topRight, bottomRight, bottomLeft]
+            }
+        }
+
+        do {
+            let pipeline = try pipelines.pipeline(pipelines.program("aerialswap/particle"), combos: [:], blending: SceneBlending(material.blending))
+            let binding = Binding(texture: texture.texture,
+                                  sampler: sampler(nearest: texture.flags.contains(.pointFilter), clamp: texture.flags.contains(.clampUVs),
+                                                   mips: texture.hasMips),
+                                  resolution: texture.resolution, format: texture.format)
+            draw(pipeline, encoder: frame.scene(), vertices: vertices, slots: [0: binding], constants: material.constants,
+                 system: self.system(mvp: projection, model: matrix_identity_float4x4, color: .one, time: time))
+        } catch {
+            issues.insert("Particles “\(name)”: \(Self.firstLine(error))")
+        }
+    }
+
+    private func particleMaterial(_ path: String) -> SceneDocument.MaterialPass? {
+        if let cached = particleMaterials[path] { return cached }
+        let pass = (try? files.json(path)).map { SceneDocument.Material(json: $0.resolvedDeep(document.properties)) }?.passes.first
+        particleMaterials[path] = pass
+        return pass
+    }
+
     // MARK: - Passes
 
     private struct Binding {
@@ -448,7 +559,14 @@ public final class SceneRenderer {
     private func draw(_ pipeline: ScenePipeline, encoder: MTLRenderCommandEncoder, vertices: [SceneVertex], slots: [Int: Binding],
                       constants: [String: SceneJSON] = [:], system: [String: [Float]]) {
         encoder.setRenderPipelineState(pipeline.state)
-        encoder.setVertexBytes(vertices, length: MemoryLayout<SceneVertex>.stride * vertices.count, index: PipelineCache.vertexBufferIndex)
+        let length = MemoryLayout<SceneVertex>.stride * vertices.count
+        if length <= 4096 {
+            encoder.setVertexBytes(vertices, length: length, index: PipelineCache.vertexBufferIndex)
+        } else if let buffer = device.makeBuffer(bytes: vertices, length: length) {
+            encoder.setVertexBuffer(buffer, offset: 0, index: PipelineCache.vertexBufferIndex)
+        } else {
+            return
+        }
         encoder.setVertexBuffer(pipelines.constants, offset: 0, index: PipelineCache.constantBufferIndex)
         var system = system
         for (slot, b) in slots { system["g_Texture\(slot)Resolution"] = [b.resolution.x, b.resolution.y, b.resolution.z, b.resolution.w] }
@@ -489,7 +607,8 @@ public final class SceneRenderer {
                 }
             }
         }
-        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: vertices.count)
+        // Quads are 4-vertex strips; particles come as triangles.
+        encoder.drawPrimitives(type: vertices.count == 4 ? .triangleStrip : .triangle, vertexStart: 0, vertexCount: vertices.count)
     }
 
     /// A uniform's value: the material's (through the shader's annotation), else the renderer's, else the

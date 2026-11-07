@@ -104,7 +104,7 @@ public enum SceneJSON: Sendable, Equatable {
     /// property is unknown falls back to its `value`.
     public func resolved(_ properties: [String: SceneJSON]) -> SceneJSON {
         guard let binding = userBinding else {
-            if case .object(let dictionary) = self, dictionary.count <= 2, let value = dictionary["value"],
+            if case .object(let dictionary) = self, let value = dictionary["value"],
                dictionary.keys.allSatisfy({ $0 == "value" || $0 == "script" || $0 == "scriptproperties" }) {
                 return value
             }

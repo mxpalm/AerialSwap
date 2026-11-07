@@ -86,6 +86,8 @@ public struct SceneDocument: Sendable {
         public let solidLayer: Bool
         /// A puppet-warp skeleton (`.mdl`), animated by bones.
         public let puppet: String?
+        /// The layer shows the scene behind it (AerialSwap's utility models: compose, fullscreen and project layers).
+        public let compose: Bool
     }
 
     public struct Material: Sendable {
@@ -236,7 +238,7 @@ public struct SceneDocument: Sendable {
                 materialPath: m["material"]?.string, width: m["width"]?.number, height: m["height"]?.number,
                 fullscreen: m["fullscreen"]?.bool ?? false, autosize: m["autosize"]?.bool ?? false,
                 passthrough: m["passthrough"]?.bool ?? false, solidLayer: m["solidlayer"]?.bool ?? false,
-                puppet: m["puppet"]?.string)
+                puppet: m["puppet"]?.string, compose: m["aerialswap"]?.string == "compose")
             var material = model.materialPath.flatMap { self.material($0) } ?? Material(passes: [])
             // The image's own "instance" overrides apply to its material's first pass.
             if let instance = o["instance"], !material.passes.isEmpty { Self.apply(instance, to: &material.passes[0]) }

@@ -37,3 +37,54 @@ import Testing
               + "missing \(document.missingFiles.sorted()), blockers \(analysis.blockers), left out \(analysis.leftOut)")
     }
 }
+
+import Metal
+
+/// Every shader pass the local scenes use, translated and compiled through to a Metal library.
+@Suite struct LocalShadersTests {
+    @Test(.enabled(if: !LocalScenesTests.scenes.isEmpty)) func shadersCompile() throws {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        var ok = 0
+        var failures: [String] = []
+        for folder in LocalScenesTests.scenes {
+            let project = try SceneProject(folder: folder)
+            let files = try SceneFiles(folder: folder, entry: project.file)
+            let document = try SceneDocument(files: files, project: project)
+            var seen = Set<String>()
+            for object in document.objects {
+                guard case .image(let layer) = object.kind else { continue }
+                let passes = layer.material.passes + layer.effects.flatMap { $0.passes.compactMap(\.material).flatMap(\.passes) }
+                for pass in passes {
+                    let key = pass.shader + pass.combos.sorted { $0.key < $1.key }.description
+                    guard seen.insert(key).inserted else { continue }
+                    do {
+                        let source = try ShaderTranslator.sources(pass.shader, files: files)
+                        let translated = ShaderTranslator.translate(vertex: source.vertex, fragment: source.fragment, combos: pass.combos)
+                        if let dir = ProcessInfo.processInfo.environment["SCENE_SHADER_DUMP"] {
+                            let base = URL(fileURLWithPath: dir).appending(path: folder.lastPathComponent + "_" + pass.shader.replacingOccurrences(of: "/", with: "_"))
+                            try? translated.vertex.write(to: base.appendingPathExtension("vert"), atomically: true, encoding: .utf8)
+                            try? translated.fragment.write(to: base.appendingPathExtension("frag"), atomically: true, encoding: .utf8)
+                        }
+                        for (text, stage) in [(translated.vertex, ShaderStage.vertex), (translated.fragment, .fragment)] {
+                            do {
+                                let metal = try ShaderTranslator.compile(text, stage: stage)
+                                _ = try device.makeLibrary(source: metal.source, options: nil)
+                            } catch let error as ShaderCompileError {
+                                // Show the lines the log points at.
+                                let lines = text.components(separatedBy: "\n")
+                                let numbers = ShaderTranslator.matches(#"ERROR: \d+:(\d+):"#, in: error.description).compactMap { Int($0[1]) }
+                                let context = Set(numbers).sorted().prefix(3).map { n in "[\(n)] " + (n <= lines.count ? lines[n - 1].trimmingCharacters(in: .whitespaces) : "") }
+                                throw ShaderCompileError(description: "\(stage) " + error.description.prefix(160) + " >> " + context.joined(separator: " >> "))
+                            }
+                        }
+                        ok += 1
+                    } catch {
+                        failures.append("\(folder.lastPathComponent) \(pass.shader): \(String(describing: error).prefix(300))")
+                    }
+                }
+            }
+        }
+        print("shaders: \(ok) ok, \(failures.count) failed")
+        for f in failures { print("  " + f.replacingOccurrences(of: "\n", with: " | ")) }
+    }
+}

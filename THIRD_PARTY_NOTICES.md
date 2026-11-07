@@ -1,7 +1,17 @@
 # Third-party notices
 
-AerialSwap itself is MIT-licensed (see `LICENSE`). It bundles no third-party code. The programs and
-services below are only used when you ask for them, and they keep their own licenses and terms.
+AerialSwap itself is MIT-licensed (see `LICENSE`). It bundles the two shader compilers below; the programs and
+services after them are only used when you ask for them, and they keep their own licenses and terms.
+
+## Bundled code
+
+Compiled into AerialSwap to turn Wallpaper Engine scenes' shaders into Metal. Their sources are in `ThirdParty/`,
+unchanged from the releases, with their license files.
+
+| Library | Used for | License | Source |
+|---|---|---|---|
+| [glslang](https://github.com/KhronosGroup/glslang) 16.6.0 | Compiling GLSL and HLSL shaders to SPIR-V | BSD-3-Clause, BSD-2-Clause, MIT, Apache-2.0; its Bison-generated parser is GPL-3.0 with the Bison exception, which allows use in other licenses (`ThirdParty/glslang/LICENSE.txt`) | github.com/KhronosGroup/glslang |
+| [SPIRV-Cross](https://github.com/KhronosGroup/SPIRV-Cross) vulkan-sdk-1.4.363.0 | Translating SPIR-V to Metal Shading Language | Apache-2.0 (`ThirdParty/SPIRV-Cross/LICENSE`) | github.com/KhronosGroup/SPIRV-Cross |
 
 ## Helper programs (installed on request, never bundled)
 

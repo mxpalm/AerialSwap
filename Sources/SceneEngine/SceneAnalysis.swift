@@ -24,7 +24,7 @@ public struct SceneAnalysis: Sendable, Equatable {
                         if source.contains("g_AudioSpectrum") { leftOut["audio visualizers", default: 0] += 1 }
                     }
                 }
-            case .text: leftOut["text and clocks", default: 0] += 1
+            case .text: leftOut["clocks and now playing", default: 0] += 1   // other text is drawn (SceneDocument.textLayer)
             case .sound: leftOut["sound", default: 0] += 1
             case .model3D: leftOut["3D models", default: 0] += 1
             case .light: leftOut["lights", default: 0] += 1

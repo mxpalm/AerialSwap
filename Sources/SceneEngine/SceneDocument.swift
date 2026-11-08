@@ -65,6 +65,11 @@ public struct SceneDocument: Sendable {
         public let effects: [Effect]
         /// Material passes with the layer's own overrides (`instance` overrides on the image).
         public let material: Material
+        /// A text layer's text: the renderer draws it as the layer's texture (`textTexture`).
+        public var text: SceneText? = nil
+
+        /// The texture name a text layer's material reads.
+        static func textTexture(_ id: Int) -> String { "__text/\(id)" }
     }
 
     public struct ParticleLayer: Sendable {
@@ -182,7 +187,10 @@ public struct SceneDocument: Sendable {
         self.properties = properties
         let raw = try files.json(project.file)
         let scene = raw.resolvedDeep(properties)
-        var loader = Loader(files: files, properties: properties)
+        // Scripts first: values bound to them read as their saved value below, so text needs them to tell clocks.
+        let scripts = try Self.scripts(in: raw["objects"]?.array ?? [], properties: properties)
+        var loader = Loader(files: files, properties: properties,
+                            liveText: Set(scripts.filter { $0.path == "text" && SceneText.isLive($0.source) }.map(\.object)))
 
         var general = General()
         if let g = scene["general"] {
@@ -210,7 +218,7 @@ public struct SceneDocument: Sendable {
         guard list.count <= SceneLimits.maxObjects else { throw SceneError.tooLarge("The scene's object list") }
         objects = list.compactMap { loader.object($0) }
         missingFiles = loader.missing
-        scripts = try Self.scripts(in: raw["objects"]?.array ?? [], properties: properties)
+        self.scripts = scripts
     }
 
     /// The scripts in the objects' values, with where each value is.
@@ -256,6 +264,8 @@ public struct SceneDocument: Sendable {
     private struct Loader {
         let files: SceneFiles
         let properties: [String: SceneJSON]
+        /// Text objects whose script makes live text (clocks, now playing; see SceneText.isLive).
+        let liveText: Set<Int>
         var missing: Set<String> = []
 
         mutating func json(_ path: String) -> SceneJSON? {
@@ -276,8 +286,9 @@ public struct SceneDocument: Sendable {
                 kind = json(particle).map {
                     .particle(ParticleLayer(path: particle, definition: $0, instanceOverride: o["instanceoverride"]?.object ?? [:]))
                 } ?? .unknown
-            } else if o["text"] != nil {
-                kind = .text
+            } else if let text = o["text"] {
+                // Clocks (and text that can't be drawn) stay text objects, which aren't drawn.
+                kind = textLayer(o, text: text, id: id).map(Kind.image) ?? .text
             } else if o["sound"] != nil {
                 kind = .sound
             } else if o["model"] != nil {
@@ -319,6 +330,37 @@ public struct SceneDocument: Sendable {
                 colorBlendMode: Int(o["colorBlendMode"]?.number ?? 0), copyBackground: o["copybackground"]?.bool ?? false,
                 pointFilter: o["nointerpolation"]?.bool ?? false, clampUVs: o["clampuvs"]?.bool ?? false,
                 effects: Array(effects), material: material)
+        }
+
+        /// A text object as an image layer showing its text: static text, and scripted text that isn't live (its saved
+        /// value is shown). nil for live text.
+        mutating func textLayer(_ o: SceneJSON, text: SceneJSON, id: Int) -> ImageLayer? {
+            guard !liveText.contains(id), let string = text.string else { return nil }
+            func value(_ key: String) -> SceneJSON? { o[key] }
+            let effects = (o["effects"]?.array ?? []).prefix(SceneLimits.maxEffects).enumerated().compactMap { effect($1, index: $0) }
+            let color = value("color")?.vector.flatMap { $0.count >= 3 ? SIMD3($0[0], $0[1], $0[2]) : nil } ?? .one
+            let opaque = value("opaquebackground")?.bool ?? false
+            let background = value("backgroundcolor")?.vector.flatMap { $0.count >= 3 ? SIMD3($0[0], $0[1], $0[2]) : nil }
+                .map { $0 * (value("backgroundbrightness")?.number ?? 1) }
+            let horizontal = (value("horizontalalign")?.string ?? "center").lowercased()
+            let vertical = (value("verticalalign")?.string ?? "center").lowercased()
+            let spec = SceneText(
+                string: string, font: value("font")?.string ?? "systemfont_arial",
+                pointSize: value("pointsize")?.number ?? 32, padding: effects.isEmpty ? 0 : value("padding")?.number ?? 32,
+                alignment: horizontal, maxWidth: value("limitwidth")?.bool == true ? value("maxwidth")?.number : nil,
+                maxRows: value("limitrows")?.bool == true ? value("maxrows")?.number.map { max(1, Int($0)) } : nil,
+                ellipsis: value("limituseellipsis")?.bool ?? false, background: opaque ? background ?? .zero : nil, color: color)
+            let pass = MaterialPass(shader: "genericimage2", blending: "translucent", textures: [ImageLayer.textTexture(id)],
+                                    combos: [:], constants: [:], userTextures: [:])
+            let model = Model(materialPath: nil, width: nil, height: nil, fullscreen: false, autosize: false, passthrough: false,
+                              solidLayer: false, puppet: nil, compose: false)
+            // The origin is where the block is anchored: its left edge for left-aligned text, its top for top-aligned.
+            let alignment = "\(vertical == "top" || vertical == "bottom" ? vertical : "") \(horizontal == "left" || horizontal == "right" ? horizontal : "")"
+            return ImageLayer(
+                modelPath: "", model: model, size: nil, alignment: alignment.trimmingCharacters(in: .whitespaces).isEmpty ? "center" : alignment,
+                alpha: value("alpha")?.number ?? 1, color: opaque ? .one : color, brightness: value("brightness")?.number ?? 1,
+                colorBlendMode: 0, copyBackground: false, pointFilter: false, clampUVs: true,
+                effects: Array(effects), material: Material(passes: [pass]), text: spec)
         }
 
         mutating func material(_ path: String) -> Material? {

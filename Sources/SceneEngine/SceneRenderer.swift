@@ -96,8 +96,8 @@ public final class SceneRenderer {
 
         var issues = Set<String>()
         objectsByID = Dictionary(document.objects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        items = Self.items(of: document, files: files, bufferScale: min(max(bufferScale, 0.05), 1), particles: particles,
-                           issues: &issues)
+        items = Self.items(of: document, files: files, textures: textures, bufferScale: min(max(bufferScale, 0.05), 1),
+                           particles: particles, issues: &issues)
         self.issues = issues
         self.timeOfDay = min(max(timeOfDay, 0), 1)
         clockStart = Calendar.current.startOfDay(for: .now).addingTimeInterval(self.timeOfDay * 86_400)
@@ -139,8 +139,8 @@ public final class SceneRenderer {
         var name: String { object.name }
     }
 
-    private static func items(of document: SceneDocument, files: SceneFiles, bufferScale: Double, particles: Bool,
-                              issues: inout Set<String>) -> [Item] {
+    private static func items(of document: SceneDocument, files: SceneFiles, textures: TextureStore, bufferScale: Double,
+                              particles: Bool, issues: inout Set<String>) -> [Item] {
         let byID = Dictionary(document.objects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         func shows(_ object: SceneDocument.Object, depth: Int = 0) -> Bool {
             guard let id = object.parent, let parent = byID[id], parent.id != object.id, depth < 32 else { return object.visible }
@@ -169,6 +169,11 @@ public final class SceneRenderer {
             case .image(let image):
                 var size = image.size ?? SIMD2(image.model.width ?? 0, image.model.height ?? 0)
                 if image.model.fullscreen { size = SIMD2(document.general.width, document.general.height) }
+                if let text = image.text {
+                    // As big as its text, a scene unit per pixel; empty text draws nothing.
+                    guard let texture = textures.text(SceneDocument.ImageLayer.textTexture(object.id), text) else { continue }
+                    size = SIMD2(Double(texture.imageWidth), Double(texture.imageHeight))
+                }
                 guard size.x >= 1, size.y >= 1 else {
                     if shows(object) { issues.insert("Layer “\(object.name)” has no size") }
                     continue

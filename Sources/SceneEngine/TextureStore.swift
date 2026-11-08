@@ -110,6 +110,30 @@ final class TextureStore {
         return texture
     }
 
+    /// A text layer's texture, drawn now and then found under `name` like any texture; nil when there's nothing to draw.
+    func text(_ name: String, _ text: SceneText) -> GPUTexture? {
+        if let cached = cache[name] { return cached }
+        var texture: GPUTexture?
+        if let raster = text.raster(files: files) {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: raster.width,
+                                                                      height: raster.height, mipmapped: true)
+            descriptor.usage = .shaderRead
+            if let image = device.makeTexture(descriptor: descriptor) {
+                image.replace(region: MTLRegionMake2D(0, 0, raster.width, raster.height), mipmapLevel: 0,
+                              withBytes: raster.pixels, bytesPerRow: raster.width * 4)
+                if let commands = queue.makeCommandBuffer(), let blit = commands.makeBlitCommandEncoder() {
+                    blit.generateMipmaps(for: image)
+                    blit.endEncoding()
+                    commands.commit()
+                }
+                texture = GPUTexture(images: [image], width: raster.width, height: raster.height,
+                                     imageWidth: raster.width, imageHeight: raster.height, flags: [.clampUVs])
+            }
+        }
+        cache[name] = texture
+        return texture
+    }
+
     /// Lets go of the video frames drawn so far; call once the GPU has finished the frame.
     func frameDone() {
         for video in videos { video.release() }

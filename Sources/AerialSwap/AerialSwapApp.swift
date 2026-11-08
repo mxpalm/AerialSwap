@@ -14,6 +14,10 @@ enum Main {
         }
         if args.first == "--steam-download" { exit(SteamDownload.runChild(args)) }   // started by SteamDownloader
         if args.first == "--steam-check" { exit(SteamDownload.runCheck()) }          // started by SteamDownload.checkOwnership
+        if args.first == "--bake-scene" {                                            // started by SceneBakeProcess
+            Task { exit(await SceneBaker.runChild(args)) }
+            dispatchMain()
+        }
         if args.first == "--snapshot" {
             // ImageRenderer needs the real main thread, so keep its run loop going (dispatchMain would exit it).
             Task { @MainActor in exit(await Snapshot.run(args)) }

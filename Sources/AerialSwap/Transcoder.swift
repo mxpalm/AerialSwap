@@ -309,7 +309,8 @@ final class Transcoder: @unchecked Sendable {
             .concatenating(CGAffineTransform(translationX: dx, y: dy))
     }
 
-    private static func makeEncoder(fps: Int, sink: WriterSink) throws -> VTCompressionSession {
+    /// `quality` (0…1) encodes every frame to the same quality instead of an average bitrate (see SceneBaker).
+    static func makeEncoder(fps: Int, sink: WriterSink, quality: Double? = nil) throws -> VTCompressionSession {
         var session: VTCompressionSession?
         let spec = [kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true] as CFDictionary
         let status = VTCompressionSessionCreate(
@@ -326,11 +327,10 @@ final class Transcoder: @unchecked Sendable {
         // Bitrate grows with frame rate, but less than linearly: neighbouring frames are nearly identical.
         // 20 Mbps at 60 fps is clean for 4K and close to Apple's own Aerials (~10-12 Mbps at 240 fps).
         let bitrate = [30: 14_000_000, 60: 20_000_000, 120: 26_000_000, 240: 32_000_000][fps] ?? 20_000_000
-        let properties: [CFString: CFTypeRef] = [
+        var properties: [CFString: CFTypeRef] = [
             kVTCompressionPropertyKey_ProfileLevel: kVTProfileLevel_HEVC_Main10_AutoLevel,
             kVTCompressionPropertyKey_RealTime: kCFBooleanFalse,
             kVTCompressionPropertyKey_ExpectedFrameRate: fps as CFNumber,
-            kVTCompressionPropertyKey_AverageBitRate: bitrate as CFNumber,
             kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration: 2.0 as CFNumber,
             // Hierarchical encoding -> HEVC temporal sub-layers + TSA sample groups (needed by macOS).
             kVTCompressionPropertyKey_BaseLayerFrameRate: min(baseLayerFPS, Double(fps) / 2) as CFNumber,
@@ -338,6 +338,11 @@ final class Transcoder: @unchecked Sendable {
             kVTCompressionPropertyKey_TransferFunction: kCVImageBufferTransferFunction_sRGB,
             kVTCompressionPropertyKey_YCbCrMatrix: kCVImageBufferYCbCrMatrix_ITU_R_709_2,
         ]
+        if let quality {
+            properties[kVTCompressionPropertyKey_Quality] = quality as CFNumber
+        } else {
+            properties[kVTCompressionPropertyKey_AverageBitRate] = bitrate as CFNumber
+        }
         for (key, value) in properties {
             let s = VTSessionSetProperty(session, key: key, value: value)
             guard s == noErr else { throw TranscodeError.encoderSetup(s) }
@@ -382,8 +387,8 @@ private struct HDRToneMap: Sendable {
 }
 
 /// Renders Core Image frames into 10-bit 4:2:0 buffers tagged like the output (BT.709 / sRGB).
-/// Used for HLG tone mapping and for the loop crossfade.
-private final class CIFrameRenderer {
+/// Used for HLG tone mapping, the loop crossfade and baked scenes (see SceneBaker).
+final class CIFrameRenderer {
     let canvas = CGRect(x: 0, y: 0, width: Transcoder.width, height: Transcoder.height)
     private let context = CIContext(options: [
         .workingColorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!,
@@ -490,7 +495,7 @@ private final class GridSource {
 
 /// Receives encoded HEVC samples from VideoToolbox and writes them unchanged (passthrough)
 /// with AVAssetWriter, which turns the temporal-level sample attachments into tscl/tsas boxes.
-private final class WriterSink: @unchecked Sendable {
+final class WriterSink: @unchecked Sendable {
     private let writer: AVAssetWriter
     private var input: AVAssetWriterInput?
     private let lock = NSLock()

@@ -1,9 +1,10 @@
 import Metal
 import simd
 
-/// How a pass's output meets what's already in its target, by the names materials use.
+/// How a pass's output meets what's already in its target, by the names materials use. `fade` mixes by the encoder's
+/// blend color alpha whatever the output's own alpha (the loop crossfade).
 enum SceneBlending: Hashable {
-    case none, translucent, additive
+    case none, translucent, additive, fade
 
     init(_ name: String) {
         self = switch name {
@@ -121,6 +122,12 @@ final class PipelineCache {
             color.destinationRGBBlendFactor = .one
             color.sourceAlphaBlendFactor = .one
             color.destinationAlphaBlendFactor = .one
+        case .fade:
+            color.isBlendingEnabled = true
+            color.sourceRGBBlendFactor = .blendAlpha
+            color.destinationRGBBlendFactor = .oneMinusBlendAlpha
+            color.sourceAlphaBlendFactor = .blendAlpha
+            color.destinationAlphaBlendFactor = .oneMinusBlendAlpha
         }
         let pipeline = ScenePipeline(state: try device.makeRenderPipelineState(descriptor: descriptor),
                                      vertex: vertex, fragment: fragment, program: program)

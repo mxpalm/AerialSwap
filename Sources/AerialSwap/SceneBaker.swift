@@ -1,0 +1,241 @@
+import CoreImage
+import Foundation
+import Metal
+import SceneEngine
+import VideoToolbox
+
+/// What baking a scene made: the loop its video repeats in, and what the renderer had to leave out.
+struct SceneBake: Sendable {
+    var loop: SceneLoop
+    var problems: [String]
+}
+
+enum SceneBakeError: LocalizedError {
+    case notAScene
+    case scene(String)
+    case stopped(String)
+    case cancelled
+
+    var errorDescription: String? {
+        switch self {
+        case .notAScene: "This wallpaper isn't a scene."
+        case .scene(let message): "The scene can't be turned into a video: \(message)"
+        case .stopped(let detail): "AerialSwap's scene renderer stopped (\(detail)). This scene can't be used yet."
+        case .cancelled: "Cancelled."
+        }
+    }
+}
+
+/// Turns a Wallpaper Engine scene into an Aerial video: SceneEngine renders one loop period (see SceneLoop.plan) at
+/// 3840×2160 and the frames are encoded like Transcoder's output (HEVC Main 10 with temporal layers). The scene draws
+/// natively at the output frame rate, so 120 and 240 fps need no interpolation.
+enum SceneBaker {
+    /// Bakes the scene in `folder` into `destination`. `progress` gets frames done and the total.
+    static func bake(folder: URL, destination: URL, fps: Int,
+                     progress: (Int, Int) -> Void) async throws -> SceneBake {
+        let document: SceneDocument, files: SceneFiles, loop: SceneLoop, renderer: SceneRenderer
+        do {
+            let project = try SceneProject(folder: folder)
+            guard project.kind == .scene else { throw SceneBakeError.notAScene }
+            files = try SceneFiles(folder: folder, entry: project.file)
+            document = try SceneDocument(files: files, project: project)
+            loop = try SceneLoop.plan(document: document, files: files).loop
+            renderer = try SceneRenderer(document: document, files: files, width: Transcoder.width, height: Transcoder.height)
+        } catch let error as SceneError {
+            throw SceneBakeError.scene(error.description)
+        }
+        renderer.loop = loop
+        // Periods are on a 0.1 s grid, so this is whole at 30, 60, 120 and 240 fps.
+        let frames = max(1, Int((loop.period * Double(fps)).rounded()))
+        Log.info("Scene bake \(folder.lastPathComponent): \(loop.period)s loop, crossfade \(loop.crossfade)s @\(fps)fps")
+
+        let converter = try CIFrameRenderer()
+        let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
+        // Core Image puts a texture's first row at the bottom; the renderer's first row is the top.
+        let flip = CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: -CGFloat(Transcoder.height))
+
+        try? FileManager.default.removeItem(at: destination)
+        let sink = try WriterSink(url: destination)
+        // Constant quality, not an average bitrate: on a mostly still picture, rate control starts with soft keyframes and
+        // sharpens later ones, so the loop would visibly lose detail where it starts over. 0.75 lands near the 20 Mbps
+        // videos get (5–24 Mbps on the scenes tried).
+        let encoder = try Transcoder.makeEncoder(fps: fps, sink: sink, quality: 0.75)
+        defer { VTCompressionSessionInvalidate(encoder) }
+        do {
+            for index in 0 ..< frames {
+                if let error = sink.error { throw error }
+                let texture = try renderer.render(time: Double(index) / Double(fps))
+                guard let image = CIImage(mtlTexture: texture, options: [.colorSpace: sRGB]) else {
+                    throw SceneBakeError.scene("a frame couldn't be read back")
+                }
+                // Render waits for Core Image, so the next frame can draw into the same texture.
+                let frame = try converter.render(image.transformed(by: flip).settingAlphaOne(in: converter.canvas))
+                let status = VTCompressionSessionEncodeFrame(
+                    encoder, imageBuffer: frame, presentationTimeStamp: CMTime(value: CMTimeValue(index), timescale: CMTimeScale(fps)),
+                    duration: CMTime(value: 1, timescale: CMTimeScale(fps)), frameProperties: nil, sourceFrameRefcon: nil,
+                    infoFlagsOut: nil)
+                guard status == noErr else { throw TranscodeError.encode(status) }
+                progress(index + 1, frames)
+            }
+            let status = VTCompressionSessionCompleteFrames(encoder, untilPresentationTimeStamp: .invalid)
+            guard status == noErr else { throw TranscodeError.encode(status) }
+            try await sink.finish()
+        } catch {
+            sink.cancel()
+            try? FileManager.default.removeItem(at: destination)
+            throw error
+        }
+        Log.info("Scene bake finished: \(frames) frames -> \(destination.path)")
+        return SceneBake(loop: loop, problems: renderer.problems)
+    }
+
+    /// `AerialSwap --bake-scene <folder> <out.mov> [--fps 30|60|120|240]`, run by SceneBakeProcess. Prints PROGRESS
+    /// <done> <total>, then LOOP <period> <crossfade> and a PROBLEM line for each thing left out, or ERROR <message>.
+    static func runChild(_ args: [String]) async -> Int32 {
+        guard args.count == 3 || (args.count == 5 && args[3] == "--fps") else {
+            print("usage: AerialSwap --bake-scene <folder> <out.mov> [--fps 30|60|120|240]"); return 2
+        }
+        let fps = args.count == 5 ? Int(args[4]) ?? 0 : 60
+        guard [30, 60, 120, 240].contains(fps) else { print("ERROR The frame rate must be 30, 60, 120 or 240."); return 2 }
+        setvbuf(stdout, nil, _IOLBF, 0)   // a line at a time, also into a pipe
+        do {
+            var reported = -1
+            let bake = try await bake(folder: URL(fileURLWithPath: args[1]), destination: URL(fileURLWithPath: args[2]),
+                                      fps: fps) { done, total in
+                // At most 200 lines, the last one at 100%.
+                let step = done * 200 / total
+                if step != reported || done == total { print("PROGRESS \(done) \(total)"); reported = step }
+            }
+            print("LOOP \(bake.loop.period) \(bake.loop.crossfade)")
+            for problem in bake.problems { print("PROBLEM \(problem.replacingOccurrences(of: "\n", with: " "))") }
+            return 0
+        } catch {
+            print("ERROR \(error.localizedDescription.replacingOccurrences(of: "\n", with: " "))")
+            return 1
+        }
+    }
+}
+
+/// Runs `AerialSwap --bake-scene` in its own process and reports its progress. Scenes bring their own shaders, and a
+/// crash while compiling or drawing one then stops only the helper. Cancel stops it.
+final class SceneBakeProcess: @unchecked Sendable {
+    private let lock = NSLock()
+    private var process: Process?
+    private var cancelled = false
+
+    func cancel() {
+        lock.withLock {
+            cancelled = true
+            process?.terminate()
+        }
+    }
+
+    func run(folder: URL, destination: URL, fps: Int, progress: @escaping @Sendable (Double) -> Void) async throws -> SceneBake {
+        guard let executable = Bundle.main.executableURL else { throw SceneBakeError.stopped("its program wasn't found") }
+        let p = Process()
+        p.executableURL = executable
+        p.arguments = ["--bake-scene", folder.path, destination.path, "--fps", String(fps)]
+        p.standardInput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        let out = Pipe()
+        p.standardOutput = out
+
+        let lines = Lines()
+        out.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty else { lines.finish(); return }   // end of output
+            for line in lines.append(data) where line.hasPrefix("PROGRESS ") {
+                let numbers = line.split(separator: " ").dropFirst().compactMap { Double($0) }
+                if numbers.count == 2, numbers[1] > 0 { progress(min(1, numbers[0] / numbers[1])) }
+            }
+        }
+        defer { out.fileHandleForReading.readabilityHandler = nil }
+
+        Log.info("Scene bake: \(folder.lastPathComponent) @\(fps)fps")
+        let (status, reason): (Int32, Process.TerminationReason) = try await withCheckedThrowingContinuation { continuation in
+            p.terminationHandler = { continuation.resume(returning: ($0.terminationStatus, $0.terminationReason)) }
+            do {
+                try lock.withLock {
+                    if cancelled { throw SceneBakeError.cancelled }
+                    try p.run()
+                    process = p
+                }
+            } catch {
+                continuation.resume(throwing: error)
+            }
+        }
+        if lock.withLock({ cancelled }) {
+            try? FileManager.default.removeItem(at: destination)
+            throw SceneBakeError.cancelled
+        }
+        // The exit can be handled before the last lines are read: wait for the end of the output, at most 2 s.
+        Task { try? await Task.sleep(for: .seconds(2)); lines.finish() }
+        await lines.ended()
+
+        var loop: SceneLoop?, problems: [String] = [], message: String?
+        for line in lines.all {
+            if line.hasPrefix("LOOP ") {
+                let numbers = line.split(separator: " ").dropFirst().compactMap { Double($0) }
+                if numbers.count == 2 { loop = SceneLoop(period: numbers[0], crossfade: numbers[1]) }
+            } else if line.hasPrefix("PROBLEM ") {
+                problems.append(String(line.dropFirst(8)))
+            } else if line.hasPrefix("ERROR ") {
+                message = String(line.dropFirst(6))
+            }
+        }
+        guard reason == .exit, status == 0, let loop else {
+            try? FileManager.default.removeItem(at: destination)
+            if let message { Log.error("Scene bake: \(message)"); throw SceneBakeError.scene(message) }
+            let detail = reason == .uncaughtSignal ? "signal \(status)" : "exit code \(status)"
+            Log.error("Scene bake: the helper stopped (\(detail))")
+            throw SceneBakeError.stopped(detail)
+        }
+        if !problems.isEmpty { Log.info("Scene bake left out: \(problems.joined(separator: "; "))") }
+        return SceneBake(loop: loop, problems: problems)
+    }
+
+    /// The helper's output, split into lines as it arrives.
+    private final class Lines: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pending = ""
+        private var lines: [String] = []
+        private var finished = false
+        private var waiter: CheckedContinuation<Void, Never>?
+
+        /// Adds output and returns the lines it completed.
+        func append(_ data: Data) -> [String] {
+            lock.withLock {
+                pending += String(decoding: data, as: UTF8.self)
+                var complete: [String] = []
+                while let newline = pending.firstIndex(of: "\n") {
+                    complete.append(String(pending[..<newline]))
+                    pending.removeSubrange(...newline)
+                }
+                lines += complete
+                return complete
+            }
+        }
+
+        var all: [String] { lock.withLock { lines } }
+
+        func finish() {
+            let waiter: CheckedContinuation<Void, Never>? = lock.withLock {
+                finished = true
+                defer { self.waiter = nil }
+                return self.waiter
+            }
+            waiter?.resume()
+        }
+
+        func ended() async {
+            await withCheckedContinuation { continuation in
+                let done = lock.withLock {
+                    if finished { return true }
+                    waiter = continuation
+                    return false
+                }
+                if done { continuation.resume() }
+            }
+        }
+    }
+}

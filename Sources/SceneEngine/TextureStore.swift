@@ -14,14 +14,20 @@ final class GPUTexture {
     let flags: SceneTexture.Flags
     let frames: [SceneTexture.Frame]
     let hasMips: Bool
+    /// A video texture's frames (then `images` holds only a black stand-in).
+    let video: VideoTexture?
 
     var texture: MTLTexture { images[0] }
+    /// The texture to draw with at `time`: a video's frame due, or the first image.
+    func texture(at time: Double) -> MTLTexture { video?.texture(at: time) ?? images[0] }
     /// `g_TextureNResolution`: texture size, then image size.
     var resolution: SIMD4<Float> { SIMD4(Float(width), Float(height), Float(imageWidth), Float(imageHeight)) }
 
     init(images: [MTLTexture], width: Int, height: Int, imageWidth: Int, imageHeight: Int,
-         format: SceneTexture.Format = .rgba8, flags: SceneTexture.Flags = [], frames: [SceneTexture.Frame] = []) {
+         format: SceneTexture.Format = .rgba8, flags: SceneTexture.Flags = [], frames: [SceneTexture.Frame] = [],
+         video: VideoTexture? = nil) {
         self.images = images
+        self.video = video
         self.width = width
         self.height = height
         self.imageWidth = imageWidth
@@ -36,7 +42,7 @@ final class GPUTexture {
     /// sprite frame due.
     func frame(at time: Double) -> (texture: MTLTexture, rect: SIMD4<Float>) {
         let image = SIMD4<Float>(0, 0, Float(imageWidth) / Float(width), Float(imageHeight) / Float(height))
-        guard !frames.isEmpty else { return (texture, image) }
+        guard !frames.isEmpty else { return (texture(at: time), image) }
         let total = frames.reduce(0) { $0 + $1.duration }
         var t = total > 0 ? time.truncatingRemainder(dividingBy: total) : 0
         var frame = frames[0]
@@ -72,6 +78,7 @@ final class TextureStore {
     private(set) var problems: [String: String] = [:]
     /// Wallpaper Engine's built-in textures drawn by AerialSwap instead (particle shapes the package doesn't carry).
     private(set) var substituted: Set<String> = []
+    private var videos: [VideoTexture] = []
 
     init(device: MTLDevice, queue: MTLCommandQueue, files: SceneFiles) {
         self.device = device
@@ -87,7 +94,7 @@ final class TextureStore {
         var texture: GPUTexture?
         if let data = files.data(path) {
             do {
-                texture = try load(SceneTexture(data: data, name: path))
+                texture = try load(SceneTexture(data: data, name: path), name: path)
             } catch {
                 problems[name] = "\(error)"
             }
@@ -103,18 +110,27 @@ final class TextureStore {
         return texture
     }
 
+    /// Lets go of the video frames drawn so far; call once the GPU has finished the frame.
+    func frameDone() {
+        for video in videos { video.release() }
+    }
+
     /// A 1×1 texture of one color, for empty slots.
     lazy var white = solid([255, 255, 255, 255])
     lazy var black = solid([0, 0, 0, 255])
 
     // MARK: - Loading
 
-    private func load(_ tex: SceneTexture) throws -> GPUTexture {
+    private func load(_ tex: SceneTexture, name: String) throws -> GPUTexture {
         let images: [MTLTexture]
         switch tex.encoding {
         case .raw: images = try tex.images.map { try raw($0, format: tex.format) }
         case .png, .jpeg: images = try tex.images.map { try encoded($0[0], width: tex.textureWidth, height: tex.textureHeight) }
-        case .mp4: throw SceneError.unsupported("Video textures")
+        case .mp4:
+            let video = try VideoTexture(data: tex.images[0][0].data, name: name, device: device)
+            videos.append(video)
+            return GPUTexture(images: [black.texture], width: video.width, height: video.height, imageWidth: video.width,
+                              imageHeight: video.height, flags: tex.flags, video: video)
         }
         // A raw texture's first mip is the whole texture; encoded images may come without padding.
         let width = images[0].width, height = images[0].height

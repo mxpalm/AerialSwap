@@ -221,11 +221,12 @@ public final class SceneRenderer {
                 pass.colorAttachments[0].loadAction = .load
                 pass.colorAttachments[0].storeAction = .store
                 if let encoder = commands.makeRenderCommandEncoder(descriptor: pass),
-                   let pipeline = try? pipelines.pipeline(pipelines.program("aerialswap/image"), combos: [:], blending: .translucent) {
-                    let weight = Float(1 - t / loop.crossfade)
+                   let pipeline = try? pipelines.pipeline(pipelines.program("aerialswap/image"), combos: [:], blending: .fade) {
+                    // By weight alone: where the scene leaves alpha below 1, translucent blending wouldn't fully replace
+                    // the frame at weight 1, and the loop would jump there.
+                    encoder.setBlendColor(red: 0, green: 0, blue: 0, alpha: Float(1 - t / loop.crossfade))
                     draw(pipeline, encoder: encoder, vertices: clipQuad(rectangle(SIMD4(0, 0, 1, 1))), slots: [0: buffer(later)],
-                         system: system(mvp: matrix_identity_float4x4, model: matrix_identity_float4x4,
-                                        color: SIMD4(1, 1, 1, weight), time: t))
+                         system: system(mvp: matrix_identity_float4x4, model: matrix_identity_float4x4, color: .one, time: t))
                     encoder.endEncoding()
                 }
             }
@@ -234,6 +235,7 @@ public final class SceneRenderer {
         }
         commands.commit()
         commands.waitUntilCompleted()
+        textures.frameDone()
         if let error = commands.error { throw error }
         return target
     }
@@ -538,7 +540,7 @@ public final class SceneRenderer {
 
         do {
             let pipeline = try pipelines.pipeline(pipelines.program("aerialswap/particle"), combos: [:], blending: SceneBlending(material.blending))
-            let binding = Binding(texture: texture.texture,
+            let binding = Binding(texture: texture.texture(at: time),
                                   sampler: sampler(nearest: texture.flags.contains(.pointFilter), clamp: texture.flags.contains(.clampUVs),
                                                    mips: texture.hasMips),
                                   resolution: texture.resolution, format: texture.format)
@@ -581,7 +583,7 @@ public final class SceneRenderer {
                 return nil
             }
             guard let texture = textures.texture(name) else { return nil }
-            return Binding(texture: texture.texture,
+            return Binding(texture: texture.texture(at: time),
                            sampler: sampler(nearest: texture.flags.contains(.pointFilter), clamp: texture.flags.contains(.clampUVs),
                                             mips: texture.hasMips),
                            resolution: texture.resolution, format: texture.format)

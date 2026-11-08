@@ -186,6 +186,7 @@ final class AppModel {
     var done: DoneInfo?
     private var transcodedURL: URL?
     private var transcoder: Transcoder?
+    private var sceneBake: SceneBakeProcess?
     private var converter: FFmpegConverter?
 
     // Transient UI state
@@ -1770,8 +1771,46 @@ final class AppModel {
         }
     }
 
+    /// Renders a Wallpaper Engine scene into a video in a helper process (see SceneBaker), then saves it to the library
+    /// like a transcoded video and (optionally) shows it.
+    func bakeScene(_ folder: URL, name: String, credit: (credit: String, page: String?)?, fps: Int, thenShow: Bool) {
+        guard !isBusy else { return }
+        let destination = Self.workDir().appending(path: "\(UUID().uuidString).mov")
+        let bake = SceneBakeProcess()
+        sceneBake = bake
+        if let old = transcodedURL { try? FileManager.default.removeItem(at: old) }
+        transcodedURL = nil
+        displayName = name   // the library's name for it (see save)
+        let settings = LibrarySettings(fps: fps, motion: nil, enhanced: false, smoothLoop: true,
+                                       credit: credit?.credit, sourcePage: credit?.page)
+        workStarted = .now
+        startProgress("Rendering the scene in 4K", flow: thenShow ? .newVideo : .saveOnly, step: .prepare)
+
+        Task.detached {
+            do {
+                _ = try await bake.run(folder: folder, destination: destination, fps: fps) { p in
+                    Task { @MainActor in self.progress = p }
+                }
+                await MainActor.run {
+                    self.sceneBake = nil
+                    self.transcodedURL = destination
+                    self.save(destination, settings: settings, thenShow: thenShow)
+                }
+            } catch {
+                await MainActor.run {
+                    self.sceneBake = nil
+                    self.displayName = nil
+                    self.stopProgress()
+                    if case SceneBakeError.cancelled = error { self.notice = Notice(kind: .info, text: "Cancelled. Nothing was changed.") }
+                    else { self.fail(error) }
+                }
+            }
+        }
+    }
+
     func cancel() {
         transcoder?.cancel()
+        sceneBake?.cancel()
         converter?.cancel()
         urlImporter?.cancel()
         toolInstaller?.cancel()

@@ -2,7 +2,8 @@ import Foundation
 import simd
 
 /// A particle system simulated on the CPU, deterministically: a fixed time step and a seeded random source, so the
-/// same time always gives the same frame (videos baked twice match, loops can be checked).
+/// same time always gives the same frame (videos baked twice match, loops can be checked). With `loop(every:)` it
+/// repeats exactly, for videos that loop without a seam.
 ///
 /// Read from a particle JSON: emitters spawn particles (in a sphere or box around their origin), initializers give
 /// each its starting values, operators change them over its life, and renderers say how they're drawn. The scene's
@@ -57,6 +58,21 @@ final class ParticleSystem {
     private var random: RandomSource
     private var time: Float = 0
     private var emitted: [Float]
+
+    /// Loop mode: everything repeats every `steps` steps of `dt`.
+    private struct Cycle {
+        let steps: Int
+        let dt: Float
+        let seconds: Float
+        /// Particles each emitter spawns per cycle.
+        let spawns: [Int]
+        /// Cycles to run from empty before the state repeats (every particle alive then was born inside them).
+        let warmUp: Int
+    }
+
+    private var cycle: Cycle?
+    private var phase = 0
+    private var warmed = false
 
     // MARK: - Reading the definition
 
@@ -260,9 +276,56 @@ final class ParticleSystem {
 
     // MARK: - Simulating
 
+    /// Makes the system repeat exactly every `period` seconds, or run freely as Wallpaper Engine runs it (nil).
+    ///
+    /// In a loop, spawns follow a schedule that repeats each period, each spawn's randomness comes from its place in
+    /// that schedule, and the turbulence field drifts around a circle instead of along a line, so after a warm-up the
+    /// state at t and t + period is the same, bit for bit. Rates are capped so the expected count stays within
+    /// `maxcount`: turning spawns away when full would make the count depend on history.
+    func loop(every period: Double?) {
+        particles = []
+        phase = 0
+        warmed = false
+        random = RandomSource(seed: seed)
+        time = 0
+        emitted = Array(repeating: 0, count: emitters.count)
+        defer { for child in children { child.system.loop(every: period) } }
+        guard let period, period > 0 else {
+            cycle = nil
+            return
+        }
+        let steps = max(1, Int((Float(period) / Self.step).rounded()))
+        var meanLife: Float = 1, maxLife: Float = 1
+        for case .lifetime(let a, let b) in initializers {
+            meanLife = (a + b) / 2
+            maxLife = max(a, b)
+        }
+        meanLife = max(0.01, meanLife * overrides.lifetime)
+        maxLife = max(0.01, maxLife * overrides.lifetime)
+        let total = emitters.reduce(0) { $0 + $1.rate }
+        let cap = total * meanLife > Float(maxCount) && total > 0 ? Float(maxCount) / (total * meanLife) : 1
+        cycle = Cycle(steps: steps, dt: Float(period) / Float(steps), seconds: Float(period),
+                      spawns: emitters.map { max(0, Int(($0.rate * cap * Float(period)).rounded())) },
+                      warmUp: max(1, Int(((maxLife + Float(period) / Float(steps)) / Float(period)).rounded(.up))))
+    }
+
     /// Advances to `time` seconds into the wallpaper (the system has already run `starttime` seconds by then).
-    /// Going back starts over.
+    /// Going back starts over; in a loop it goes on to the same point of the next cycle instead.
     func advance(to time: Double) {
+        defer { for child in children { child.system.advance(to: time) } }
+        if let cycle {
+            if !warmed {
+                for i in 0 ..< cycle.warmUp * cycle.steps { update(cycle.dt, step: i % cycle.steps) }
+                phase = 0
+                warmed = true
+            }
+            let target = ((Int((time / Double(cycle.dt)).rounded()) % cycle.steps) + cycle.steps) % cycle.steps
+            while phase != target {
+                update(cycle.dt, step: phase)
+                phase = (phase + 1) % cycle.steps
+            }
+            return
+        }
         let target = Float(time) + startTime
         if target < self.time {
             particles = []
@@ -271,13 +334,22 @@ final class ParticleSystem {
             emitted = Array(repeating: 0, count: emitters.count)
         }
         while self.time + Self.step <= target {
-            update(Self.step)
+            update(Self.step, step: nil)
             self.time += Self.step
         }
-        for child in children { child.system.advance(to: time) }
     }
 
-    private func update(_ dt: Float) {
+    /// One step of `dt`; `step` is the step's place in the loop's cycle (nil when running freely).
+    private func update(_ dt: Float, step: Int?) {
+        // How far the turbulence field has drifted: along a line, or around a circle once per cycle.
+        func drift(_ timeScale: Float) -> SIMD2<Float> {
+            let speed = timeScale * 0.1
+            guard let step, let cycle else { return SIMD2(1, -0.7) * time * speed }
+            let angle = 2 * Float.pi * Float(step) / Float(cycle.steps)
+            let radius = speed * 1.22 * cycle.seconds / (2 * .pi)
+            return SIMD2(cos(angle), sin(angle)) * radius
+        }
+
         // Age, and let the dead go.
         for i in particles.indices { particles[i].age += dt }
         particles.removeAll { $0.age >= $0.lifetime }
@@ -296,7 +368,7 @@ final class ParticleSystem {
                     p.rotation += p.angularVelocity * dt
                 case .turbulence(let speedMin, let speedMax, let scale, let timeScale):
                     let speed = speedMin + (speedMax - speedMin) * Self.hash(p.seed, 1)
-                    let direction = Self.flow(p.position * scale, time: time * timeScale * 0.1)
+                    let direction = Self.flow(p.position * scale, drift: drift(timeScale))
                     p.velocity += direction * speed * dt
                 case .attract(let point, let scale, let threshold):
                     let delta = point - p.position
@@ -309,18 +381,32 @@ final class ParticleSystem {
             particles[i] = p
         }
 
+        if let step, let cycle {
+            for (index, emitter) in emitters.enumerated() {
+                if emitter.duration > 0, Float(step) * dt > emitter.duration { continue }
+                // The cycle's spawns spread evenly over its steps; each gets the randomness of its number.
+                let count = cycle.spawns[index]
+                for number in step * count / cycle.steps ..< (step + 1) * count / cycle.steps where particles.count < maxCount * 4 {
+                    var random = RandomSource(seed: seed ^ (UInt64(index + 1) << 48) ^ UInt64(number) &* 0x9E37_79B9_7F4A_7C15)
+                    particles.append(spawn(emitter, random: &random))
+                }
+            }
+            return
+        }
         for (index, emitter) in emitters.enumerated() {
             if emitter.duration > 0, time > emitter.duration { continue }
             emitted[index] += emitter.rate * dt
             while emitted[index] >= 1 {
                 emitted[index] -= 1
                 guard particles.count < maxCount else { continue }
-                particles.append(spawn(emitter))
+                var random = self.random
+                particles.append(spawn(emitter, random: &random))
+                self.random = random
             }
         }
     }
 
-    private func spawn(_ emitter: Emitter) -> Particle {
+    private func spawn(_ emitter: Emitter, random: inout RandomSource) -> Particle {
         var direction: SIMD3<Float>
         var offset: SIMD3<Float>
         switch emitter.shape {
@@ -356,7 +442,7 @@ final class ParticleSystem {
             case .angularVelocity(let a, let b): p.angularVelocity = a + (b - a) * SIMD3(random.next(), random.next(), random.next())
             case .turbulentVelocity(let speedMin, let speedMax, let scale, let offset):
                 let speed = speedMin + (speedMax - speedMin) * random.next()
-                p.velocity += Self.flow(p.position * scale * 0.01 + offset, time: 0) * speed
+                p.velocity += Self.flow(p.position * scale * 0.01 + offset, drift: .zero) * speed
             }
         }
         p.lifetime = max(0.01, p.lifetime * overrides.lifetime)
@@ -430,9 +516,10 @@ final class ParticleSystem {
         return Float(x >> 8) / Float(1 << 24)
     }
 
-    /// A smooth unit-ish 2D direction field that drifts with time (the gradient of value noise turned 90°, so it
-    /// swirls instead of converging).
-    static func flow(_ p: SIMD3<Float>, time: Float) -> SIMD3<Float> {
+    /// A smooth 2D direction field, moved by `drift` (the gradient of value noise turned 90°, so it swirls instead of
+    /// converging).
+    static func flow(_ p: SIMD3<Float>, drift: SIMD2<Float>) -> SIMD3<Float> {
+        guard p.x.isFinite, p.y.isFinite, abs(p.x) < 1e6, abs(p.y) < 1e6 else { return SIMD3(1, 0, 0) }
         func noise(_ x: Float, _ y: Float) -> Float {
             let ix = floor(x), iy = floor(y), fx = x - ix, fy = y - iy
             func corner(_ i: Float, _ j: Float) -> Float {
@@ -442,7 +529,7 @@ final class ParticleSystem {
             let a = corner(ix, iy), b = corner(ix + 1, iy), c = corner(ix, iy + 1), d = corner(ix + 1, iy + 1)
             return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy
         }
-        let x = p.x + time, y = p.y - time * 0.7, e: Float = 0.01
+        let x = p.x + drift.x, y = p.y + drift.y, e: Float = 0.01
         let dx = (noise(x + e, y) - noise(x - e, y)) / (2 * e)
         let dy = (noise(x, y + e) - noise(x, y - e)) / (2 * e)
         let v = SIMD3<Float>(dy, -dx, 0)

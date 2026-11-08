@@ -39,7 +39,19 @@ public final class SceneRenderer {
         (issues.union(textures.problems.map { "Texture \($0.key): \($0.value)" })).sorted()
     }
 
-    public init(document: SceneDocument, files: SceneFiles, width: Int, height: Int, device: MTLDevice? = nil) throws {
+    /// The loop the frames repeat in: times wrap around its period, particles repeat exactly, and the start of each
+    /// period crossfades from the frame one period later (for effects that never repeat). Nil: the scene runs freely.
+    public var loop: SceneLoop? {
+        didSet {
+            guard loop != oldValue else { return }
+            for case .particles(let particles) in items { particles.system.loop(every: loop?.period) }
+        }
+    }
+
+    /// `bufferScale` sizes the layers' buffers relative to their size in scene units (below 1 for quick previews; effects
+    /// that measure in pixels then look a little different). Without `particles`, particle systems aren't drawn.
+    public init(document: SceneDocument, files: SceneFiles, width: Int, height: Int, bufferScale: Double = 1,
+                particles: Bool = true, device: MTLDevice? = nil) throws {
         guard let device = device ?? MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
             throw SceneError.unsupported("Rendering without Metal")
         }
@@ -72,7 +84,8 @@ public final class SceneRenderer {
             SIMD4(0, 0, 1e-6, 0), SIMD4(-w * scale / Float(width), -h * scale / Float(height), 0.5, 1)))
 
         var issues = Set<String>()
-        items = Self.items(of: document, files: files, issues: &issues)
+        items = Self.items(of: document, files: files, bufferScale: min(max(bufferScale, 0.05), 1), particles: particles,
+                           issues: &issues)
         self.issues = issues
     }
 
@@ -108,7 +121,8 @@ public final class SceneRenderer {
         let isReferenced: Bool
     }
 
-    private static func items(of document: SceneDocument, files: SceneFiles, issues: inout Set<String>) -> [Item] {
+    private static func items(of document: SceneDocument, files: SceneFiles, bufferScale: Double, particles: Bool,
+                              issues: inout Set<String>) -> [Item] {
         let byID = Dictionary(document.objects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         func local(_ t: SceneDocument.Transform) -> simd_float4x4 {
             let c = Float(cos(t.angles.z)), s = Float(sin(t.angles.z))
@@ -168,13 +182,14 @@ public final class SceneRenderer {
                 items.append(.layer(Layer(
                     id: object.id, name: object.name, image: image, world: world,
                     corners: [SIMD2(left, bottom + h), SIMD2(left + w, bottom + h), SIMD2(left, bottom), SIMD2(left + w, bottom)],
-                    size: SIMD2(min(8192, max(1, Int(size.x.rounded()))), min(8192, max(1, Int(size.y.rounded())))),
+                    size: SIMD2(min(8192, max(1, Int((size.x * bufferScale).rounded()))),
+                                min(8192, max(1, Int((size.y * bufferScale).rounded())))),
                     compose: compose, effects: effects,
                     needsBackground: (compose && !effects.isEmpty) || image.colorBlendMode != 0 || names.contains("_rt_FullFrameBuffer"),
                     isReferenced: referenced.contains(object.id))))
             case .particle(let particle):
                 let (world, visible) = placement(object)
-                guard visible else { continue }
+                guard visible, particles else { continue }
                 let system = ParticleSystem(definition: particle.definition, overrides: .init(particle.instanceOverride),
                                             seed: UInt64(UInt32(truncatingIfNeeded: object.id)) &+ 1) { path in
                     (try? files.json(path))?.resolvedDeep(document.properties)
@@ -194,8 +209,51 @@ public final class SceneRenderer {
     @discardableResult
     public func render(time: Double) throws -> MTLTexture {
         guard let commands = queue.makeCommandBuffer() else { throw SceneError.unsupported("Rendering without Metal") }
+        if let loop, loop.period > 0 {
+            let t = time - (time / loop.period).rounded(.down) * loop.period
+            encode(time: t, into: target, commands: commands)
+            if t < loop.crossfade {
+                // Fade in from one period later, which is where the previous period ended.
+                let later = crossfadeTarget()
+                encode(time: t + loop.period, into: later, commands: commands)
+                let pass = MTLRenderPassDescriptor()
+                pass.colorAttachments[0].texture = target
+                pass.colorAttachments[0].loadAction = .load
+                pass.colorAttachments[0].storeAction = .store
+                if let encoder = commands.makeRenderCommandEncoder(descriptor: pass),
+                   let pipeline = try? pipelines.pipeline(pipelines.program("aerialswap/image"), combos: [:], blending: .translucent) {
+                    let weight = Float(1 - t / loop.crossfade)
+                    draw(pipeline, encoder: encoder, vertices: clipQuad(rectangle(SIMD4(0, 0, 1, 1))), slots: [0: buffer(later)],
+                         system: system(mvp: matrix_identity_float4x4, model: matrix_identity_float4x4,
+                                        color: SIMD4(1, 1, 1, weight), time: t))
+                    encoder.endEncoding()
+                }
+            }
+        } else {
+            encode(time: time, into: target, commands: commands)
+        }
+        commands.commit()
+        commands.waitUntilCompleted()
+        if let error = commands.error { throw error }
+        return target
+    }
+
+    private var crossfadeCanvas: MTLTexture?
+
+    private func crossfadeTarget() -> MTLTexture {
+        if let crossfadeCanvas { return crossfadeCanvas }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: width, height: height, mipmapped: false)
+        descriptor.usage = [.renderTarget, .shaderRead]
+        descriptor.storageMode = .private
+        let texture = device.makeTexture(descriptor: descriptor)!
+        crossfadeCanvas = texture
+        return texture
+    }
+
+    /// Encodes the scene at `time` into `output`.
+    private func encode(time: Double, into output: MTLTexture, commands: MTLCommandBuffer) {
         let c = document.general.clearColor
-        let frame = Frame(commands: commands, target: target,
+        let frame = Frame(commands: commands, target: output,
                           clear: MTLClearColor(red: Double(c.x), green: Double(c.y), blue: Double(c.z), alpha: 1))
         for item in items {
             switch item {
@@ -209,10 +267,6 @@ public final class SceneRenderer {
         frame.endScene()
         composites.values.forEach(give)
         composites = [:]
-        commands.commit()
-        commands.waitUntilCompleted()
-        if let error = commands.error { throw error }
-        return target
     }
 
     /// The frame at `time` as an opaque image.
@@ -284,7 +338,7 @@ public final class SceneRenderer {
         if layer.needsBackground {
             frame.endScene()
             if let blit = frame.commands.makeBlitCommandEncoder() {
-                blit.copy(from: target, to: background)
+                blit.copy(from: frame.target, to: background)
                 blit.endEncoding()
             }
         }

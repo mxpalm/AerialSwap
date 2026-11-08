@@ -5,6 +5,14 @@ struct ConfigureView: View {
     @Bindable var model: AppModel
 
     var body: some View {
+        if let setup = model.sceneSetup {
+            SceneConfigureView(model: model, setup: setup)
+        } else {
+            video
+        }
+    }
+
+    private var video: some View {
         ZStack {
             background
             HeaderEdgeEffect()

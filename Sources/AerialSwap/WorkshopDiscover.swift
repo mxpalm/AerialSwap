@@ -37,7 +37,7 @@ struct WorkshopItem: Identifiable, Hashable, Sendable {
 
     /// The creator's genre tags, without the type, rating and resolution ones.
     var genres: [String] {
-        let technical: Set<String> = ["Video", "Wallpaper", "Everyone", "Approved", "Other resolution"]
+        let technical: Set<String> = ["Video", "Scene", "Wallpaper", "Everyone", "Approved", "Other resolution"]
         return tags.filter { !technical.contains($0) && !$0.contains(" x ") }
     }
 }
@@ -130,7 +130,7 @@ struct WorkshopClient: Sendable {
         if let key {
             // The same request the proxy makes.
             components = URLComponents(string: "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/")!
-            let tags = ["Video", "Everyone"] + (topicTag.map { [$0] } ?? []) + (options.resolution == .uhd ? [Self.tag4K] : [])
+            let tags = [options.workshopKind.tag, "Everyone"] + (topicTag.map { [$0] } ?? []) + (options.resolution == .uhd ? [Self.tag4K] : [])
             let excluded = options.resolution == .qhd ? Self.below1440Tags : []
             components.queryItems = items + tags.enumerated().map { URLQueryItem(name: "requiredtags[\($0.offset)]", value: $0.element) }
                 + excluded.enumerated().map { URLQueryItem(name: "excludedtags[\($0.offset)]", value: $0.element) } + [
@@ -141,6 +141,7 @@ struct WorkshopClient: Sendable {
         } else if let proxy, let viaProxy = URLComponents(url: proxy.appending(path: "workshop"), resolvingAgainstBaseURL: false) {
             components = viaProxy
             components.queryItems = items + (topicTag.map { [URLQueryItem(name: "tag", value: $0)] } ?? [])
+                + (options.workshopKind == .scene ? [URLQueryItem(name: "type", value: "scene")] : [])
                 + (options.resolution.proxyValue.map { [URLQueryItem(name: "resolution", value: $0)] } ?? [])
         } else {
             throw WorkshopSearchError.noKey
@@ -154,6 +155,8 @@ struct WorkshopClient: Sendable {
         case let status: throw WorkshopSearchError.http(status)
         }
         var result = Self.parse(data)
+        // A proxy from before scenes ignores `type` and answers with videos: those aren't what was asked for.
+        result.items.removeAll { !$0.tags.contains(options.workshopKind.tag) }
         // The proxy adds the creators' names; with a key of one's own they're asked for here.
         if let key, result.items.contains(where: { $0.creatorName == nil && $0.creatorID != nil }) {
             let names = await Self.creatorNames(Set(result.items.compactMap(\.creatorID)), key: key)

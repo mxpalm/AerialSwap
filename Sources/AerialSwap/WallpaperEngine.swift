@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import ImageIO
+import SceneEngine
 
 /// A video wallpaper from the Steam Workshop of Wallpaper Engine, downloaded by the user's own Steam.
 /// AerialSwap only reads what Steam already put on disk: no Steam login, no downloads.
@@ -20,10 +21,73 @@ struct WorkshopVideo: Identifiable, Hashable, Sendable {
     }
 }
 
-/// What a scan found: the video wallpapers, how many other wallpapers were skipped (scenes, web and application
+/// A scene wallpaper (Wallpaper Engine's own format: layers, effects, particles), rendered into a video by SceneEngine.
+struct WorkshopScene: Identifiable, Hashable, Sendable {
+    var id: String
+    var title: String
+    var folder: URL
+    var preview: URL?
+    var rating: String?
+    var source: String
+
+    var page: URL? {
+        guard !id.isEmpty, id.allSatisfy(\.isNumber) else { return nil }
+        return URL(string: "https://steamcommunity.com/sharedfiles/filedetails/?id=\(id)")
+    }
+}
+
+/// Whether a scene can become a video, for the import list: it works, works but leaves things out, or can't be used.
+enum SceneVerdict: Hashable, Sendable {
+    case works
+    case worksWithout([String])
+    case unsupported(String)
+
+    /// Reads the scene (its files only; nothing is compiled or run) and judges it with SceneAnalysis.
+    init(folder: URL) {
+        do {
+            let project = try SceneProject(folder: folder)
+            let files = try SceneFiles(folder: folder, entry: project.file)
+            let analysis = SceneAnalysis(try SceneDocument(files: files, project: project), files: files)
+            if let blocker = analysis.blockers.first {
+                self = .unsupported("Uses \(blocker), which AerialSwap can't show yet.")
+            } else if analysis.leftOut.isEmpty {
+                self = .works
+            } else {
+                self = .worksWithout(analysis.leftOut.sorted { ($1.value, $0.key) < ($0.value, $1.key) }.map(\.key))
+            }
+        } catch let error as SceneError {
+            self = .unsupported("Can't be read: \(error.description)")
+        } catch {
+            self = .unsupported("Can't be read: \(error.localizedDescription)")
+        }
+    }
+
+    var canUse: Bool { if case .unsupported = self { false } else { true } }
+
+    /// One short line for a tile.
+    var summary: String {
+        switch self {
+        case .works: "Scene"
+        case .worksWithout(let parts): "Scene · without \(parts.first ?? "")\(parts.count > 1 ? " +\(parts.count - 1)" : "")"
+        case .unsupported: "Not supported yet"
+        }
+    }
+
+    /// The whole verdict, for a tooltip or Configure.
+    var detail: String {
+        switch self {
+        case .works: "Everything in this scene shows in the video."
+        case .worksWithout(let parts): "Left out of the video: \(parts.joined(separator: ", "))."
+        case .unsupported(let reason): reason
+        }
+    }
+}
+
+/// What a scan found: the video and scene wallpapers, how many other wallpapers were skipped (web and application
 /// wallpapers can't become videos here) and which Steam folders were looked at.
 struct WorkshopScan: Sendable {
     var videos: [WorkshopVideo] = []
+    var scenes: [WorkshopScene] = []
     var skipped = 0
     var sources: [String] = []
 }
@@ -57,13 +121,28 @@ enum WallpaperEngine {
                 switch item(at: folder, source: label) {
                 case .video(let video):
                     if seen.insert(video.id).inserted { scan.videos.append(video) }
+                case .scene(let scene):
+                    if seen.insert(scene.id).inserted { scan.scenes.append(scene) }
                 case .other: scan.skipped += 1
                 case .none: break
                 }
             }
         }
         scan.videos.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        scan.scenes.sort { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         return scan
+    }
+
+    /// The scene wallpaper in one download folder, or nil when it isn't one.
+    static func scene(in folder: URL) -> WorkshopScene? {
+        if case .scene(let scene) = item(at: folder, source: "Steam") { return scene }
+        return nil
+    }
+
+    /// The item's scene when Steam has already downloaded it.
+    static func downloadedScene(id: String) -> WorkshopScene? {
+        guard SteamDownload.isValidID(id) else { return nil }
+        return contentFolders().lazy.compactMap { scene(in: $0.1.appending(path: id)) }.first
     }
 
     /// The video wallpaper in one download folder (e.g. right after Steam downloaded it), or nil when it isn't one.
@@ -161,7 +240,7 @@ enum WallpaperEngine {
 
     // MARK: - Items
 
-    private enum Item { case video(WorkshopVideo), other }
+    private enum Item { case video(WorkshopVideo), scene(WorkshopScene), other }
 
     /// Reads one download's project.json. nil when it isn't a wallpaper (no or unreadable project.json).
     private static func item(at folder: URL, source: String) -> Item? {
@@ -169,12 +248,17 @@ enum WallpaperEngine {
         guard (try? projectFile.resourceValues(forKeys: [.fileSizeKey]).fileSize).map({ $0 <= maxProjectFile }) == true,
               let data = try? Data(contentsOf: projectFile),
               let project = try? JSONDecoder().decode(Project.self, from: data) else { return nil }
+        let title = clean(project.title) ?? folder.lastPathComponent
+        let rating = clean(project.contentrating).flatMap { $0.lowercased() == "everyone" ? nil : $0 }
+        if project.type?.lowercased() == "scene" {
+            return .scene(WorkshopScene(id: folder.lastPathComponent, title: title, folder: folder,
+                                        preview: project.preview.flatMap { contained($0, in: folder) },
+                                        rating: rating, source: source))
+        }
         guard project.type?.lowercased() == "video", let file = project.file,
               let video = contained(file, in: folder), videoExtensions.contains(video.pathExtension.lowercased()),
               let values = try? video.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey]), values.isRegularFile == true
         else { return .other }
-        let title = clean(project.title) ?? folder.lastPathComponent
-        let rating = clean(project.contentrating).flatMap { $0.lowercased() == "everyone" ? nil : $0 }
         return .video(WorkshopVideo(id: folder.lastPathComponent, title: title, video: video,
                                     preview: project.preview.flatMap { contained($0, in: folder) },
                                     rating: rating, size: Int64(values.fileSize ?? 0), source: source))

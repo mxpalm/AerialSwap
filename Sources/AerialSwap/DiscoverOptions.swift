@@ -74,8 +74,18 @@ enum PixabayCategory: String, Codable, CaseIterable, Sendable {
 
 /// Search options shared by Pixabay and the Workshop (the options menu at the end of the topic row), kept between
 /// launches.
+/// What the Workshop lists: video wallpapers, or scenes (rendered into a video, see SceneBaker).
+enum WorkshopKind: String, Codable, CaseIterable, Sendable {
+    case video, scene
+
+    var title: String { self == .video ? "Videos" : "Scenes" }
+    /// The Workshop tag of the type.
+    var tag: String { self == .video ? "Video" : "Scene" }
+}
+
 struct DiscoverOptions: Codable, Equatable, Sendable {
     var sort = DiscoverSort.popular
+    var workshopKind = WorkshopKind.video                // Workshop only
     var resolution = DiscoverResolution.any
     var category = PixabayCategory.any                 // Pixabay only
     var period: DiscoverPeriod?                         // Workshop only, with Popular
@@ -98,6 +108,7 @@ struct DiscoverOptions: Codable, Equatable, Sendable {
         resolution = try container.decodeIfPresent(DiscoverResolution.self, forKey: .resolution)
             ?? (try legacy.decodeIfPresent(Bool.self, forKey: .only4K) == true ? .uhd : .any)
         category = try container.decodeIfPresent(PixabayCategory.self, forKey: .category) ?? .any
+        workshopKind = try container.decodeIfPresent(WorkshopKind.self, forKey: .workshopKind) ?? .video
         period = try container.decodeIfPresent(DiscoverPeriod.self, forKey: .period)
         hideInLibrary = try container.decodeIfPresent(Bool.self, forKey: .hideInLibrary) ?? false
         removeSteamCopy = try container.decodeIfPresent(Bool.self, forKey: .removeSteamCopy) ?? true
@@ -116,9 +127,10 @@ struct DiscoverOptions: Codable, Equatable, Sendable {
         source == .workshop && sort == .popular ? period : nil
     }
 
-    /// The menu's label for a source: "Nature · Popular · 4K", "Popular This Week · 1440p+".
+    /// The menu's label for a source: "Nature · Popular · 4K", "Scenes · Popular This Week · 1440p+".
     func label(for source: DiscoverSource) -> String {
-        let category = source == .pixabay && category != .any ? category.title : nil
+        let category = source == .pixabay && category != .any ? category.title
+            : source == .workshop && workshopKind == .scene ? workshopKind.title : nil
         let sort = sort.effective(for: source).title + (period(for: source).map { " " + $0.title } ?? "")
         return [category, sort, resolution.shortTitle].compactMap { $0 }.joined(separator: " · ")
     }
@@ -218,6 +230,14 @@ struct DiscoverOptionsMenu: View {
                             Toggle(topic.title, isOn: Binding(get: { topic.id == selectedID }, set: { _ in select(topic.id) }))
                         }
                     }
+                    Divider()
+                }
+                if model.discoverSource == .workshop {
+                    Picker("Type", selection: Binding(get: { model.discoverOptions.workshopKind },
+                                                      set: { model.setWorkshopKind($0) })) {
+                        ForEach(WorkshopKind.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.inline)
                     Divider()
                 }
                 Picker("Sort", selection: Binding(get: { model.discoverOptions.sort.effective(for: model.discoverSource) },

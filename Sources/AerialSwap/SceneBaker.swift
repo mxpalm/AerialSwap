@@ -30,15 +30,16 @@ enum SceneBakeError: LocalizedError {
 /// 3840×2160 and the frames are encoded like Transcoder's output (HEVC Main 10 with temporal layers). The scene draws
 /// natively at the output frame rate, so 120 and 240 fps need no interpolation.
 enum SceneBaker {
-    /// Bakes the scene in `folder` into `destination`. `progress` gets frames done and the total.
-    static func bake(folder: URL, destination: URL, fps: Int,
+    /// Bakes the scene in `folder` into `destination`, with `properties` changed from the wallpaper's own values.
+    /// `progress` gets frames done and the total.
+    static func bake(folder: URL, destination: URL, fps: Int, properties: [String: SceneJSON] = [:],
                      progress: (Int, Int) -> Void) async throws -> SceneBake {
         let document: SceneDocument, files: SceneFiles, loop: SceneLoop, renderer: SceneRenderer
         do {
             let project = try SceneProject(folder: folder)
             guard project.kind == .scene else { throw SceneBakeError.notAScene }
             files = try SceneFiles(folder: folder, entry: project.file)
-            document = try SceneDocument(files: files, project: project)
+            document = try SceneDocument(files: files, project: project, overrides: properties)
             loop = try SceneLoop.plan(document: document, files: files).loop
             renderer = try SceneRenderer(document: document, files: files, width: Transcoder.width, height: Transcoder.height)
         } catch let error as SceneError {
@@ -89,19 +90,19 @@ enum SceneBaker {
         return SceneBake(loop: loop, problems: renderer.problems)
     }
 
-    /// `AerialSwap --bake-scene <folder> <out.mov> [--fps 30|60|120|240]`, run by SceneBakeProcess. Prints PROGRESS
-    /// <done> <total>, then LOOP <period> <crossfade> and a PROBLEM line for each thing left out, or ERROR <message>.
+    /// `AerialSwap --bake-scene <folder> <out.mov> [--fps 30|60|120|240] [--properties <json>]`, run by
+    /// SceneBakeProcess. Prints PROGRESS <done> <total>, then LOOP <period> <crossfade> and a PROBLEM line for each
+    /// thing left out, or ERROR <message>.
     static func runChild(_ args: [String]) async -> Int32 {
-        guard args.count == 3 || (args.count == 5 && args[3] == "--fps") else {
-            print("usage: AerialSwap --bake-scene <folder> <out.mov> [--fps 30|60|120|240]"); return 2
-        }
-        let fps = args.count == 5 ? Int(args[4]) ?? 0 : 60
+        let usage = "usage: AerialSwap --bake-scene <folder> <out.mov> [--fps 30|60|120|240] [--properties <json>]"
+        guard args.count >= 3, let options = SceneChildOptions(args.dropFirst(3)) else { print(usage); return 2 }
+        let fps = options.fps ?? 60
         guard [30, 60, 120, 240].contains(fps) else { print("ERROR The frame rate must be 30, 60, 120 or 240."); return 2 }
         setvbuf(stdout, nil, _IOLBF, 0)   // a line at a time, also into a pipe
         do {
             var reported = -1
             let bake = try await bake(folder: URL(fileURLWithPath: args[1]), destination: URL(fileURLWithPath: args[2]),
-                                      fps: fps) { done, total in
+                                      fps: fps, properties: options.properties) { done, total in
                 // At most 200 lines, the last one at 100%.
                 let step = done * 200 / total
                 if step != reported || done == total { print("PROGRESS \(done) \(total)"); reported = step }
@@ -130,11 +131,13 @@ final class SceneBakeProcess: @unchecked Sendable {
         }
     }
 
-    func run(folder: URL, destination: URL, fps: Int, progress: @escaping @Sendable (Double) -> Void) async throws -> SceneBake {
+    func run(folder: URL, destination: URL, fps: Int, properties: [String: SceneJSON] = [:],
+             progress: @escaping @Sendable (Double) -> Void) async throws -> SceneBake {
         guard let executable = Bundle.main.executableURL else { throw SceneBakeError.stopped("its program wasn't found") }
         let p = Process()
         p.executableURL = executable
         p.arguments = ["--bake-scene", folder.path, destination.path, "--fps", String(fps)]
+            + SceneChildOptions.arguments(properties: properties)
         p.standardInput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
         let out = Pipe()
@@ -237,5 +240,36 @@ final class SceneBakeProcess: @unchecked Sendable {
                 if done { continuation.resume() }
             }
         }
+    }
+}
+
+/// The options the scene helpers take after their paths: `--fps <n>` and `--properties <json>` (property values that
+/// differ from the wallpaper's own, as a JSON object).
+struct SceneChildOptions {
+    var fps: Int?
+    var properties: [String: SceneJSON] = [:]
+
+    /// nil when an option is unknown or its value unreadable.
+    init?(_ args: ArraySlice<String>) {
+        var rest = args
+        while let option = rest.popFirst() {
+            guard let value = rest.popFirst() else { return nil }
+            switch option {
+            case "--fps":
+                guard let n = Int(value) else { return nil }
+                fps = n
+            case "--properties":
+                guard let json = try? SceneJSON(data: Data(value.utf8), name: "properties"), let object = json.object else { return nil }
+                properties = object
+            default: return nil
+            }
+        }
+    }
+
+    static func arguments(properties: [String: SceneJSON]) -> [String] {
+        guard !properties.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: properties.mapValues(\.foundation), options: [.sortedKeys])
+        else { return [] }
+        return ["--properties", String(decoding: data, as: UTF8.self)]
     }
 }

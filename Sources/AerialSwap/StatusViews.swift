@@ -298,8 +298,8 @@ struct DownloadPartFields: View {
     }
 }
 
-/// From Wallpaper Engine: the video wallpapers the user's Steam downloaded from the Workshop. AerialSwap doesn't
-/// download anything here, it only reads Steam's folders (see WallpaperEngine).
+/// From Wallpaper Engine: the video and scene wallpapers the user's Steam downloaded from the Workshop. AerialSwap
+/// doesn't download anything here, it only reads Steam's folders (see WallpaperEngine).
 struct WorkshopImportDialog: View {
     @Bindable var model: AppModel
     private let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
@@ -309,14 +309,15 @@ struct WorkshopImportDialog: View {
             VStack(alignment: .leading, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("From Wallpaper Engine").font(.system(size: 22, weight: .bold))
-                    Text("Video wallpapers you subscribed to on the Wallpaper Engine Workshop, once Steam has downloaded them.")
+                    Text("Video and scene wallpapers you subscribed to on the Wallpaper Engine Workshop, once Steam has "
+                         + "downloaded them. Scenes are rendered into a video.")
                         .font(.system(size: 14)).foregroundStyle(Theme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 content
                 if model.workshopScan.skipped > 0 {
-                    Label("\(model.workshopScan.skipped) scene, web or app wallpaper\(model.workshopScan.skipped == 1 ? "" : "s") "
-                          + "can't be used: AerialSwap takes video wallpapers only.", systemImage: "info.circle")
+                    Label("\(model.workshopScan.skipped) web or app wallpaper\(model.workshopScan.skipped == 1 ? "" : "s") "
+                          + "can't be used: AerialSwap takes video and scene wallpapers.", systemImage: "info.circle")
                         .font(.system(size: 12)).foregroundStyle(Theme.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -344,18 +345,18 @@ struct WorkshopImportDialog: View {
     }
 
     @ViewBuilder private var content: some View {
-        if model.workshopScan.videos.isEmpty {
+        if model.workshopScan.videos.isEmpty && model.workshopScan.scenes.isEmpty {
             if model.isWorkshopScanning {
                 ProgressView().controlSize(.small).frame(maxWidth: .infinity, minHeight: 80)
             } else {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(model.workshopScan.sources.isEmpty ? "No Steam with Wallpaper Engine downloads found."
-                                                            : "No video wallpapers downloaded yet.")
+                                                            : "No video or scene wallpapers downloaded yet.")
                         .font(.system(size: 14, weight: .semibold))
                     Group {
                         Text("1. Run the Windows version of Steam on this Mac, for example with CrossOver, Whisky or "
                              + "Sevoflurane, and sign in with the account that owns Wallpaper Engine.")
-                        Text("2. Subscribe to video wallpapers on the Workshop (Open Workshop below).")
+                        Text("2. Subscribe to video or scene wallpapers on the Workshop (Open Workshop below).")
                         Text("3. Once Steam has downloaded them, they show up here.")
                     }
                     .font(.system(size: 13)).foregroundStyle(Theme.secondary)
@@ -371,9 +372,39 @@ struct WorkshopImportDialog: View {
 
     private var grid: some View {
         LazyVGrid(columns: columns, spacing: 12) {
-            ForEach(model.workshopScan.videos) { video in WorkshopTile(model: model, video: video) }
+            ForEach(entries) { entry in
+                switch entry {
+                case .video(let video): WorkshopTile(model: model, video: video)
+                case .scene(let scene): WorkshopSceneTile(model: model, scene: scene)
+                }
+            }
         }
         .padding(3)
+    }
+
+    /// Videos and scenes together, by title.
+    private var entries: [WorkshopEntry] {
+        (model.workshopScan.videos.map(WorkshopEntry.video) + model.workshopScan.scenes.map(WorkshopEntry.scene))
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+}
+
+private enum WorkshopEntry: Identifiable {
+    case video(WorkshopVideo)
+    case scene(WorkshopScene)
+
+    var id: String {
+        switch self {
+        case .video(let video): "v\(video.id)"
+        case .scene(let scene): "s\(scene.id)"
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .video(let video): video.title
+        case .scene(let scene): scene.title
+        }
     }
 }
 
@@ -397,6 +428,8 @@ private struct WorkshopTile: View {
                     RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.white.opacity(0.12), lineWidth: 1)
                 }
                 Text(video.title).font(.system(size: 12, weight: .semibold)).lineLimit(1).truncationMode(.tail)
+                Text("Video · \(video.size.formatted(.byteCount(style: .file)))")
+                    .font(.system(size: 11)).foregroundStyle(Theme.secondary).lineLimit(1)
             }
             .contentShape(Rectangle())
         }
@@ -407,6 +440,53 @@ private struct WorkshopTile: View {
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([video.video]) }
         }
         .help("\(video.title)\n\(video.size.formatted(.byteCount(style: .file))) · \(video.source)")
+    }
+
+    private func badge(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .bold))
+            .padding(.horizontal, 6).padding(.vertical, 1)
+            .background(Capsule().fill(.black.opacity(0.62)))
+            .padding(5)
+    }
+}
+
+/// A scene in the Wallpaper Engine dialog, with whether it can become a video (worked out after the scan).
+private struct WorkshopSceneTile: View {
+    @Bindable var model: AppModel
+    let scene: WorkshopScene
+
+    private var verdict: SceneVerdict? { model.sceneVerdicts[scene.id] }
+
+    var body: some View {
+        Button { model.useWorkshopScene(scene) } label: {
+            VStack(alignment: .leading, spacing: 5) {
+                ZStack {
+                    Thumb(image: model.workshopThumbnails[scene.id], cornerRadius: 9)
+                        .opacity(verdict?.canUse == false ? 0.4 : 1)
+                    if let rating = scene.rating {
+                        badge(rating).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    }
+                    badge("SCENE").frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.white.opacity(0.12), lineWidth: 1)
+                }
+                Text(scene.title).font(.system(size: 12, weight: .semibold)).lineLimit(1).truncationMode(.tail)
+                Text(verdict?.summary ?? "Scene · checking…")
+                    .font(.system(size: 11)).lineLimit(1)
+                    .foregroundStyle(verdict?.canUse == false ? Theme.warning : Theme.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(model.isBusy || verdict?.canUse == false)
+        .contextMenu {
+            if let page = scene.page { Link("View on Steam Workshop", destination: page) }
+            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([scene.folder]) }
+        }
+        .help("\(scene.title)\n\(verdict?.detail ?? "Scene") · \(scene.source)")
     }
 
     private func badge(_ text: String) -> some View {

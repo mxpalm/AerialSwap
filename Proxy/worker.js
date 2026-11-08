@@ -24,9 +24,11 @@ const RESOLUTION_EXCLUDED = {
            "Ultrawide Standard Definition", "Dual Standard Definition", "Portrait 1080 x 1920",
            "Portrait 720 x 1280", "Portrait Standard Definition", "Other resolution"],
 };
-// Wallpaper Engine's Workshop, video wallpapers for everyone only: fixed here, whatever the app asks for.
+// Wallpaper Engine's Workshop, video or scene wallpapers (type=scene) for everyone only: fixed here, whatever else the
+// app asks for.
 const WORKSHOP_APP = "431960";
-const WORKSHOP_TAGS = ["Video", "Everyone"];
+const WORKSHOP_TYPES = { video: "Video", scene: "Scene" };
+const WORKSHOP_RATING = "Everyone";
 // Ranked by vote, by date, by trend, by subscriptions, by text search.
 const QUERY_TYPES = ["0", "1", "3", "9", "12"];
 // Workshop results change more often than Pixabay's: an hour.
@@ -79,7 +81,7 @@ export default {
   },
 };
 
-// GET /workshop?search_text=&query_type=&page=&numperpage=&days=&tag=&resolution=4k|1440   (all optional)
+// GET /workshop?search_text=&query_type=&page=&numperpage=&days=&tag=&resolution=4k|1440&type=video|scene   (all optional)
 async function workshop(url, request, env, ctx) {
   if (!env.STEAM_KEY) return error(500, "The proxy has no Steam key.");
   const query = new URLSearchParams();
@@ -90,7 +92,7 @@ async function workshop(url, request, env, ctx) {
   query.set("page", String(clamp(url.searchParams.get("page"), 1, 1, 100)));
   query.set("numperpage", String(clamp(url.searchParams.get("numperpage"), 30, 3, 50)));
   if (url.searchParams.has("days")) query.set("days", String(clamp(url.searchParams.get("days"), 7, 1, 365)));
-  const tags = [...WORKSHOP_TAGS];
+  const tags = [WORKSHOP_TYPES[url.searchParams.get("type")] ?? WORKSHOP_TYPES.video, WORKSHOP_RATING];
   const tag = url.searchParams.get("tag");
   // Workshop tags are words like "Nature" or "Sci-Fi".
   if (tag && /^[A-Za-z0-9 &'-]{1,30}$/.test(tag)) tags.push(tag);

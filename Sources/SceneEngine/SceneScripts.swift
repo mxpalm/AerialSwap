@@ -188,7 +188,7 @@ final class SceneScripts {
 
 extension SceneJSON {
     /// The value as Foundation objects (what JavaScriptCore and JSONSerialization take).
-    var foundation: Any {
+    public var foundation: Any {
         switch self {
         case .null: NSNull()
         case .bool(let b): b
@@ -200,7 +200,7 @@ extension SceneJSON {
     }
 
     /// A number, string, boolean or array of numbers from JSONSerialization.
-    init?(foundation value: Any) {
+    public init?(foundation value: Any) {
         switch value {
         case let number as NSNumber:
             self = CFGetTypeID(number) == CFBooleanGetTypeID() ? .bool(number.boolValue) : .number(number.doubleValue)

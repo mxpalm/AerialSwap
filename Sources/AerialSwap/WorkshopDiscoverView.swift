@@ -50,7 +50,7 @@ struct WorkshopPanel: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(Theme.secondary).accessibilityHidden(true)
-            RenderableTextField("Search Wallpaper Engine videos", text: $model.workshopSearch, flat: model.isSnapshot)
+            RenderableTextField("Search Wallpaper Engine \(model.discoverOptions.workshopKind == .scene ? "scenes" : "videos")", text: $model.workshopSearch, flat: model.isSnapshot)
                 .textFieldStyle(.plain)
                 .onSubmit { model.submitWorkshopSearch() }
             if !model.workshopQuery.isEmpty || !model.workshopSearch.isEmpty {
@@ -90,7 +90,8 @@ struct WorkshopPanel: View {
         } else if model.workshopItems.isEmpty, model.isWorkshopLoading {
             ProgressView().controlSize(.large).frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if model.workshopItems.isEmpty {
-            message(icon: "magnifyingglass", title: "No video wallpapers found", text: "Try another word, or pick a topic above.")
+            message(icon: "magnifyingglass", title: "No \(model.discoverOptions.workshopKind == .scene ? "scenes" : "video wallpapers") found",
+                    text: "Try another word, or pick a topic above.")
         } else if model.isSnapshot {
             grid
         } else {
@@ -194,12 +195,13 @@ struct WorkshopPanel: View {
         if needsWallpaperEngine {
             return "Your Steam account doesn't own Wallpaper Engine, so Steam can't download this. Items marked In Steam still work."
         }
-        if let download { return download.isReady ? "Downloaded: trim it and pick an Aerial" : download.detail }
+        let next = item.tags.contains("Scene") ? "adjust its settings" : "trim it"
+        if let download { return download.isReady ? "Downloaded: \(next) and pick an Aerial" : download.detail }
         if let other = model.backgroundDownload {
             return other.isReady ? "Open or discard “\(other.title)” first (top bar)" : "One download at a time: “\(other.title)” is still downloading"
         }
         let size = item.size > 0 ? " (\(item.size.formatted(.byteCount(style: .file))))" : ""
-        return "Steam downloads it\(size), then you trim it and pick an Aerial"
+        return "Steam downloads it\(size), then you \(next) and pick an Aerial"
     }
 }
 

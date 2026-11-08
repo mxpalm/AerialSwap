@@ -116,6 +116,14 @@ assert.equal(q.searchParams.get("excludedtags[10]"), "Other resolution");
 assert.equal((await get(env, "/workshop?resolution=1440&page=3")).headers.get("X-Proxy-Cache"), "HIT");
 assert.ok(!(await r.text()).includes("STEAMSECRET"));
 assert.equal((await get(env, "/workshop?numperpage=500&tag=Nature&query_type=99&search_text=ocean")).headers.get("X-Proxy-Cache"), "HIT");
+// type=scene asks for scenes instead of videos; anything else stays videos.
+await get(env, "/workshop?type=scene");
+q = upstreamCalls.findLast((u) => u.pathname.includes("QueryFiles"));
+assert.equal(q.searchParams.get("requiredtags[0]"), "Scene");
+assert.equal(q.searchParams.get("requiredtags[1]"), "Everyone");
+await get(env, "/workshop?type=web&page=4");
+q = upstreamCalls.findLast((u) => u.pathname.includes("QueryFiles"));
+assert.equal(q.searchParams.get("requiredtags[0]"), "Video");
 // A tag with odd characters is ignored; without a Steam key the route refuses.
 await get(env, "/workshop?tag=%3Cscript%3E");
 assert.equal(upstreamCalls.at(-1).searchParams.get("requiredtags[2]"), null);

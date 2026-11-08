@@ -1,5 +1,6 @@
 import AppKit
 import AVKit
+import SceneEngine
 
 /// How motion is prepared: as recorded, or with generated in-between frames (see FrameInterpolator).
 enum MotionMode: String, CaseIterable, Identifiable {
@@ -219,6 +220,10 @@ final class AppModel {
     var workshopScan = WorkshopScan()
     var isWorkshopScanning = false
     var workshopThumbnails: [String: NSImage] = [:]
+    /// Scene verdicts, worked out after a scan (see SceneVerdict), by item ID.
+    var sceneVerdicts: [String: SceneVerdict] = [:]
+    /// The scene being set up in Configure, instead of a video.
+    var sceneSetup: SceneSetup?
 
     /// What the desktop shows: the window's background when no library wallpaper is picked.
     var desktopAsset: AerialAsset? { assets.first { $0.id == desktopID } }
@@ -237,7 +242,7 @@ final class AppModel {
         case .download, .tools, .convert, .newVideo, .saveOnly: return .working
         case .quick, nil: break
         }
-        if sourceURL != nil { return .configure }
+        if sourceURL != nil || sceneSetup != nil { return .configure }
         return .home
     }
     var isTrimmed: Bool { sourceInfo.map { trimStart > 0.01 || trimEnd < $0.duration - 0.01 } ?? false }
@@ -296,9 +301,9 @@ final class AppModel {
     }
     var selectedLibraryItem: LibraryItem? { libraryItems.first { $0.id == selectedLibraryID } }
     /// "Set as Wallpaper" uses the selected library item when no new video is loaded.
-    var isUsingLibrary: Bool { sourceURL == nil && selectedLibraryItem != nil }
+    var isUsingLibrary: Bool { sourceURL == nil && sceneSetup == nil && selectedLibraryItem != nil }
     var canSetWallpaper: Bool {
-        !isBusy && (sourceInfo != nil || isUsingLibrary) && !(isUsingLibrary && isSelectedItemPlaying)
+        !isBusy && (sourceInfo != nil || sceneSetup != nil || isUsingLibrary) && !(isUsingLibrary && isSelectedItemPlaying)
     }
     /// The chosen library wallpaper is on the desktop; Refresh puts it in place again (see `refreshWallpaper`).
     var canRefreshWallpaper: Bool { !isBusy && isUsingLibrary && isSelectedItemPlaying }
@@ -500,6 +505,12 @@ final class AppModel {
     func setDiscoverResolution(_ resolution: DiscoverResolution) {
         var options = discoverOptions
         options.resolution = resolution
+        applyDiscoverOptions(options)
+    }
+
+    func setWorkshopKind(_ kind: WorkshopKind) {
+        var options = discoverOptions
+        options.workshopKind = kind
         applyDiscoverOptions(options)
     }
 
@@ -950,9 +961,15 @@ final class AppModel {
         Task {
             // Already downloaded: used as it is, Steam isn't asked. Looked up off the main thread: Steam libraries can be
             // on drives that take seconds to wake up.
-            let existing = await Task.detached { WallpaperEngine.downloadedVideo(id: item.id) }.value
+            let (existing, scene) = await Task.detached {
+                (WallpaperEngine.downloadedVideo(id: item.id), WallpaperEngine.downloadedScene(id: item.id))
+            }.value
             guard !isBusy, backgroundDownload == nil else { return }
-            if let video = existing {
+            if let scene {
+                guard scene.rating == nil else { fail(SteamDownloadError.notForEveryone); return }
+                Log.info("Steam: Workshop scene \(item.id) is already downloaded")
+                useWorkshopScene(scene, credit: item.credit, steamCopy: SteamDownload.itemFolder(item.id, containing: scene.folder.appending(path: "project.json")))
+            } else if let video = existing {
                 guard video.rating == nil else { fail(SteamDownloadError.notForEveryone); return }
                 Log.info("Steam: Workshop item \(item.id) is already downloaded")
                 useWorkshopVideo(video, credit: item.credit)
@@ -970,7 +987,8 @@ final class AppModel {
         steamDownloader = downloader
         let key = "workshop-\(item.id)"
         let detail = "Your Steam app downloads it\(item.size > 0 ? " (\(item.size.formatted(.byteCount(style: .file))))" : ""). "
-            + "Meanwhile Steam shows you as playing Wallpaper Engine. Keep browsing; then you trim it and set it as your wallpaper."
+            + "Meanwhile Steam shows you as playing Wallpaper Engine. Keep browsing; then you "
+            + (item.tags.contains("Scene") ? "adjust its settings" : "trim it") + " and set it as your wallpaper."
         backgroundDownload = BackgroundDownload(key: key, title: item.title, source: "Steam", state: .running(0), detail: detail)
         notice = nil
 
@@ -993,15 +1011,20 @@ final class AppModel {
                 }) { p in
                     Task { @MainActor in self.updateBackgroundDownload(key, .running(p)) }
                 }
-                guard let video = WallpaperEngine.video(in: folder) else { throw SteamDownloadError.notAVideo }
-                guard video.rating == nil else { throw SteamDownloadError.notForEveryone }
+                let video = WallpaperEngine.video(in: folder), scene = video == nil ? WallpaperEngine.scene(in: folder) : nil
+                guard video != nil || scene != nil else { throw SteamDownloadError.notAVideo }
+                guard (video?.rating ?? scene?.rating) == nil else { throw SteamDownloadError.notForEveryone }
                 await MainActor.run {
                     self.steamDownloader = nil
                     self.refreshSteamDownloads()
                     let stillWanted = self.discoverSource == .workshop && self.selectedWorkshopItemID == item.id
                     self.finishBackgroundDownload(key, stillWanted: stillWanted) {
-                        self.useWorkshopVideo(video, credit: item.credit)
-                        self.steamCopyToRemove = folder   // after loadSource, which forgets the last one
+                        if let video {
+                            self.useWorkshopVideo(video, credit: item.credit)
+                            self.steamCopyToRemove = folder   // after loadSource, which forgets the last one
+                        } else if let scene {
+                            self.useWorkshopScene(scene, credit: item.credit, steamCopy: folder)
+                        }
                     } discard: {}   // Steam's copy stays, like any Workshop download
                 }
             } catch {
@@ -1210,20 +1233,68 @@ final class AppModel {
                 self.workshopScan = scan
                 self.isWorkshopScanning = false
                 Log.info("Wallpaper Engine: \(scan.videos.count) video wallpapers, \(scan.skipped) others in \(scan.sources)")
-                self.loadWorkshopThumbnails(scan.videos)
+                self.loadWorkshopThumbnails(scan.videos.map { ($0.id, $0.preview) } + scan.scenes.map { ($0.id, $0.preview) })
+                self.judgeScenes(scan.scenes)
             }
         }
     }
 
-    private func loadWorkshopThumbnails(_ videos: [WorkshopVideo]) {
-        let missing = videos.filter { workshopThumbnails[$0.id] == nil }
+    private func loadWorkshopThumbnails(_ items: [(id: String, preview: URL?)]) {
+        let missing = items.filter { workshopThumbnails[$0.id] == nil }
         guard !missing.isEmpty else { return }
         Task.detached {
-            for video in missing {
-                guard let preview = video.preview, let image = WallpaperEngine.thumbnail(preview) else { continue }
-                await MainActor.run { self.workshopThumbnails[video.id] = image }
+            for item in missing {
+                guard let preview = item.preview, let image = WallpaperEngine.thumbnail(preview) else { continue }
+                await MainActor.run { self.workshopThumbnails[item.id] = image }
             }
         }
+    }
+
+    /// Reads each scene once to tell whether it can become a video (a tile shows "…" until then).
+    private func judgeScenes(_ scenes: [WorkshopScene]) {
+        let missing = scenes.filter { sceneVerdicts[$0.id] == nil }
+        guard !missing.isEmpty else { return }
+        Task.detached {
+            for scene in missing {
+                let verdict = SceneVerdict(folder: scene.folder)
+                await MainActor.run { self.sceneVerdicts[scene.id] = verdict }
+            }
+        }
+    }
+
+    /// Opens a Workshop scene in Configure: its settings, a live preview and the frame rate. The folder stays where
+    /// Steam put it and is only read. `credit` as for useWorkshopVideo.
+    /// `steamCopy` is the folder Steam downloaded for Discover, removed once the video is in the library (see
+    /// steamCopyToRemove).
+    func useWorkshopScene(_ scene: WorkshopScene, credit: String? = nil, steamCopy: URL? = nil) {
+        guard !isBusy else { return }
+        showWorkshopImport = false
+        Task {
+            let loaded = await Task.detached { () -> Result<(SceneProject, SceneVerdict), Error> in
+                Result { (try SceneProject(folder: scene.folder), SceneVerdict(folder: scene.folder)) }
+            }.value
+            switch loaded {
+            case .success(let (project, verdict)):
+                self.sceneVerdicts[scene.id] = verdict
+                guard verdict.canUse else { self.notice = Notice(kind: .error, text: "“\(scene.title)”: \(verdict.detail)"); return }
+                self.clearSource()
+                self.sourceCredit = (credit ?? "a Steam Workshop creator", scene.page?.absoluteString)
+                self.displayName = scene.title
+                self.sceneSetup = SceneSetup(scene: scene, project: project, verdict: verdict)
+                self.steamCopyToRemove = steamCopy   // after clearSource, which forgets the last one
+                if let thumbnail = self.workshopThumbnails[scene.id] { self.backdrops["source"] = thumbnail }
+            case .failure(let error):
+                self.fail(error)
+            }
+        }
+    }
+
+    /// Renders the scene being set up into a video (see bakeScene).
+    private func bakeSceneSetup(thenShow: Bool) {
+        guard let setup = sceneSetup else { return }
+        setup.stopPreview()
+        bakeScene(setup.scene.folder, name: displayName ?? setup.scene.title, credit: sourceCredit, fps: setup.fps,
+                  properties: setup.changes, thenShow: thenShow)
     }
 
     /// Add Folder…: a Steam folder somewhere else (another bottle, an external disk) or a folder of wallpapers.
@@ -1503,7 +1574,7 @@ final class AppModel {
     func clearSource() {
         guard !isBusy else { return }
         stopPreview()
-        sourceURL = nil; sourceInfo = nil; displayName = nil; filmstrip = []
+        sourceURL = nil; sourceInfo = nil; displayName = nil; filmstrip = []; sceneSetup = nil
         steamCopyToRemove = nil
         showResolutionAlert = false
         if let old = convertedTempURL { try? FileManager.default.removeItem(at: old); convertedTempURL = nil }
@@ -1682,6 +1753,11 @@ final class AppModel {
     /// plus ~40 ms per source frame for Smooth motion: all in-between frames of a pair come from one optical-flow pass
     /// (measured on an M3 Pro: 25 -> 60 fps adds ~1.1x the clip length, 25 -> 120 fps less, as it overlaps the encoder).
     var estimateText: String {
+        if let setup = sceneSetup {
+            // A loop is 10–30 s, and 4K at 60 fps renders and encodes at about real time (measured: 20 s in 25 s).
+            let seconds = 30.0 * Double(setup.fps) / 60
+            return seconds < 90 ? "about \(Int(seconds)) seconds" : "about \(Int((seconds / 60).rounded())) minutes"
+        }
         let length = max(1, trimEnd - trimStart)
         var seconds = length * Double(outputFPS) / 60 * 1.15
         if interpolates, let fps = sourceInfo?.fps {
@@ -1718,11 +1794,13 @@ final class AppModel {
             show(item, savedToLibrary: false)
             return
         }
+        if sceneSetup != nil { bakeSceneSetup(thenShow: true); return }
         transcode(thenShow: true)
     }
 
     /// Prepares the new video and keeps it in the library (and so the AerialSwap group) without switching to it.
     func saveToLibraryOnly() {
+        if sceneSetup != nil { bakeSceneSetup(thenShow: false); return }
         transcode(thenShow: false)
     }
 
@@ -1773,7 +1851,8 @@ final class AppModel {
 
     /// Renders a Wallpaper Engine scene into a video in a helper process (see SceneBaker), then saves it to the library
     /// like a transcoded video and (optionally) shows it.
-    func bakeScene(_ folder: URL, name: String, credit: (credit: String, page: String?)?, fps: Int, thenShow: Bool) {
+    func bakeScene(_ folder: URL, name: String, credit: (credit: String, page: String?)?, fps: Int,
+                   properties: [String: SceneJSON] = [:], thenShow: Bool) {
         guard !isBusy else { return }
         let destination = Self.workDir().appending(path: "\(UUID().uuidString).mov")
         let bake = SceneBakeProcess()
@@ -1788,7 +1867,7 @@ final class AppModel {
 
         Task.detached {
             do {
-                _ = try await bake.run(folder: folder, destination: destination, fps: fps) { p in
+                _ = try await bake.run(folder: folder, destination: destination, fps: fps, properties: properties) { p in
                     Task { @MainActor in self.progress = p }
                 }
                 await MainActor.run {
@@ -1799,7 +1878,7 @@ final class AppModel {
             } catch {
                 await MainActor.run {
                     self.sceneBake = nil
-                    self.displayName = nil
+                    if self.sceneSetup == nil { self.displayName = nil }   // else Configure shows it again
                     self.stopProgress()
                     if case SceneBakeError.cancelled = error { self.notice = Notice(kind: .info, text: "Cancelled. Nothing was changed.") }
                     else { self.fail(error) }
@@ -1826,7 +1905,7 @@ final class AppModel {
                 if thenShow { show(item, savedToLibrary: true); return }
                 removeTempFilesAfterSaving()
                 stopPreview()
-                sourceURL = nil; sourceInfo = nil; displayName = nil; filmstrip = []
+                sourceURL = nil; sourceInfo = nil; displayName = nil; filmstrip = []; sceneSetup = nil
                 refreshLibrary()
                 syncGroup()
                 section = .library
@@ -1865,7 +1944,7 @@ final class AppModel {
                 }
                 removeTempFilesAfterSaving()
                 stopPreview()
-                sourceURL = nil; sourceInfo = nil; displayName = nil; filmstrip = []
+                sourceURL = nil; sourceInfo = nil; displayName = nil; filmstrip = []; sceneSetup = nil
                 section = .library
                 selectedLibraryID = item.id   // shows what now plays (selectLibraryItem waits while busy)
                 loadBackdrop("lib-\(item.id)", from: library.videoURL(item))

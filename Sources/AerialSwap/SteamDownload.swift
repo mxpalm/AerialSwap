@@ -343,7 +343,7 @@ enum SteamDownloadError: LocalizedError {
         switch self {
         case .notInstalled: "Downloading Workshop wallpapers needs Steam for Mac, logged in to an account that owns Wallpaper Engine."
         case .failed(let message): message
-        case .notAVideo: "Steam downloaded it, but it isn't a video wallpaper AerialSwap can use."
+        case .notAVideo: "Steam downloaded it, but it isn't a video or scene wallpaper AerialSwap can use."
         case .notForEveryone: "This wallpaper isn't rated for everyone, so AerialSwap doesn't use it."
         case .paused: "Downloading Workshop wallpapers with Steam is paused for now. Try again in a few days."
         case .notOwned: SteamDownload.notOwnedMessage

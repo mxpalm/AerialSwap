@@ -18,6 +18,7 @@ enum Main {
             Task { exit(await SceneBaker.runChild(args)) }
             dispatchMain()
         }
+        if args.first == "--preview-scene" { exit(ScenePreview.runChild(args)) }       // started by ScenePreviewProcess
         if args.first == "--snapshot" {
             // ImageRenderer needs the real main thread, so keep its run loop going (dispatchMain would exit it).
             Task { @MainActor in exit(await Snapshot.run(args)) }

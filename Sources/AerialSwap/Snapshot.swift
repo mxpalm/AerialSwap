@@ -1,4 +1,6 @@
 import AppKit
+import CoreImage
+import SceneEngine
 import SwiftUI
 
 /// Renders every screen with sample data to PNGs, for checking the UI without opening a window:
@@ -7,6 +9,18 @@ import SwiftUI
 /// the library or the temp folder.
 @MainActor
 enum Snapshot {
+    /// One frame of a scene, drawn here (snapshots only; the app draws scenes in a helper process).
+    private static func sceneFrame(_ folder: URL) -> NSImage? {
+        guard let project = try? SceneProject(folder: folder), let files = try? SceneFiles(folder: folder, entry: project.file),
+              let document = try? SceneDocument(files: files, project: project),
+              let renderer = try? SceneRenderer(document: document, files: files, width: 1280, height: 720),
+              let texture = try? renderer.render(time: 2),
+              let image = CIImage(mtlTexture: texture, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])?
+                .transformed(by: CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: -720)),
+              let cg = CIContext().createCGImage(image, from: image.extent) else { return nil }
+        return NSImage(cgImage: cg, size: NSSize(width: 1280, height: 720))
+    }
+
     static func run(_ args: [String]) async -> Int32 {
         guard args.count >= 2 else { print("usage: AerialSwap --snapshot <outDir> [footageDir]"); return 2 }
         let out = URL(fileURLWithPath: args[1], isDirectory: true)
@@ -77,8 +91,15 @@ enum Snapshot {
                     WorkshopVideo(id: "\(3_000_000_000 + i)", title: title, video: URL(fileURLWithPath: "/tmp/\(i).\(i == 1 ? "webm" : "mp4")"),
                                   preview: nil, rating: i == 1 ? "Questionable" : nil, size: 80_000_000, source: "CrossOver · Steam")
                 }, skipped: 3, sources: ["CrossOver · Steam"])
-                for (i, video) in m.workshopScan.videos.enumerated() {
-                    m.workshopThumbnails[video.id] = m.discoverThumbnails[m.discoverVideos[i % m.discoverVideos.count].id]
+                m.workshopScan.scenes = ["Alpine Village", "Lofi Room", "Starship Bridge"].enumerated().map { i, title in
+                    WorkshopScene(id: "\(3_100_000_000 + i)", title: title, folder: URL(fileURLWithPath: "/tmp/scene\(i)"),
+                                  preview: nil, rating: nil, source: "Steam")
+                }
+                let verdicts: [SceneVerdict] = [.works, .worksWithout(["sound", "text and clocks"]),
+                                                .unsupported("Uses a 3D camera, which AerialSwap can't show yet.")]
+                for (i, scene) in m.workshopScan.scenes.enumerated() { m.sceneVerdicts[scene.id] = verdicts[i] }
+                for (i, id) in (m.workshopScan.videos.map(\.id) + m.workshopScan.scenes.map(\.id)).enumerated() {
+                    m.workshopThumbnails[id] = m.discoverThumbnails[m.discoverVideos[i % m.discoverVideos.count].id]
                 }
                 m.showWorkshopImport = true
             }),
@@ -92,7 +113,20 @@ enum Snapshot {
                 m.playhead = (m.trimStart + m.trimEnd) / 2
             }),
             ("06-configure-enhance", { $0.enhanceDetail = true }),
+            ("06b-configure-scene", { m in
+                // A scene Steam downloaded on this Mac, when there is one (Mario Kart DS - Credits has every kind of setting).
+                m.enhanceDetail = false
+                guard let scene = WallpaperEngine.downloadedScene(id: "3190894366"),
+                      let project = try? SceneProject(folder: scene.folder) else { return }
+                m.clearSource()
+                m.displayName = scene.title
+                let setup = SceneSetup(scene: scene, project: project, verdict: SceneVerdict(folder: scene.folder))
+                setup.frame = sceneFrame(scene.folder)
+                setup.set("dsscanlinefilter", .bool(true))
+                m.sceneSetup = setup
+            }),
             ("07-low-resolution", { m in
+                m.sceneSetup = nil
                 await load(m, footage.appending(path: "src_low30.mov"))
                 m.resolutionPreview = await ResolutionPreview.make(url: footage.appending(path: "src_low30.mov"),
                                                                    screenPixels: CGSize(width: 3024, height: 1964), backingScale: 1)

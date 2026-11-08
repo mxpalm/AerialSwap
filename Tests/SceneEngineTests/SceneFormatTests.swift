@@ -178,3 +178,36 @@ func texture(format: Int32 = 0, flags: Int32 = 2, width: Int32, height: Int32, p
         else { Issue.record("mode should be a choice") }
     }
 }
+
+@Suite struct PropertyTests {
+    private func property(_ label: String, condition: String? = nil) -> SceneProject.Property {
+        var json = #"{"type": "bool", "value": true, "text": \#(String(decoding: try! JSONSerialization.data(withJSONObject: label, options: .fragmentsAllowed), as: UTF8.self))"#
+        if let condition { json += #", "condition": "\#(condition)""# }
+        let project = SceneProject(json: try! SceneJSON(data: Data(#"{"general": {"properties": {"p": \#(json)}}}}"#.utf8), name: "p"))
+        return project.properties[0]
+    }
+
+    @Test func titles() {
+        #expect(property("ui_browse_properties_scheme_color").title == "Scheme color")
+        #expect(property("\u{200E} \u{200E} <small>24 Hour <b>Format</b></small> &amp; more").title == "24 Hour Format & more")
+        #expect(property("<br/>").title == "p")
+        #expect(SceneProject.Property.displayText("  Night  ", fallback: "x") == "Night")
+    }
+
+    @Test func conditions() {
+        let values: [String: SceneJSON] = ["clock": .bool(true), "style": .string("2"), "count": .number(3), "off": .bool(false)]
+        func shown(_ condition: String) -> Bool { property("x", condition: condition).isShown(values: values) }
+        #expect(shown("clock.value == true && style.value == 2"))
+        #expect(!shown("clock.value == true && style.value != 2"))
+        #expect(shown("off.value || count.value >= 3"))
+        #expect(!shown("!(clock.value) || count.value < -1"))
+        #expect(shown("!off.value == true"))           // ! binds tighter than ==
+        #expect(shown("style.value === '2' && (count.value > 2.5)"))
+        #expect(!shown("missing.value == true"))
+        #expect(shown(""))
+        // Anything that isn't one of these expressions is never run: the property just shows.
+        #expect(shown("while(true){}"))
+        #expect(shown("clock.value == "))
+        #expect(shown("a.b.c == 1"))
+    }
+}

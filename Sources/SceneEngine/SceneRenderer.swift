@@ -26,6 +26,15 @@ public final class SceneRenderer {
     private let background: MTLTexture
     private let projection: simd_float4x4
     private let items: [Item]
+    private let objectsByID: [Int: SceneDocument.Object]
+    /// The scene's scripts (nil without any), and a second run of them for the frame a loop's crossfade draws.
+    private let scripts: SceneScripts?
+    private var laterScripts: SceneScripts?
+    /// Object values for the frame being drawn, as the scripts set them (empty: the document's).
+    private var state: [Int: ObjectState] = [:]
+    /// The time of day the scene shows (0…1 from midnight): `g_Daytime` and the scripts' `engine.timeOfDay` and clock.
+    public let timeOfDay: Double
+    private let clockStart: Date
     private var particleMaterials: [String: SceneDocument.MaterialPass?] = [:]
     private var pool: [SIMD2<Int>: [MTLTexture]] = [:]
     private var samplers: [Int: MTLSamplerState] = [:]
@@ -36,7 +45,8 @@ public final class SceneRenderer {
     /// What the renderer had to leave out: passes whose shader didn't compile, textures that didn't load, objects it
     /// doesn't draw yet.
     public var problems: [String] {
-        (issues.union(textures.problems.map { "Texture \($0.key): \($0.value)" })).sorted()
+        issues.union(textures.problems.map { "Texture \($0.key): \($0.value)" })
+            .union(scripts?.problems ?? []).union(laterScripts?.problems ?? []).sorted()
     }
 
     /// The loop the frames repeat in: times wrap around its period, particles repeat exactly, and the start of each
@@ -50,8 +60,9 @@ public final class SceneRenderer {
 
     /// `bufferScale` sizes the layers' buffers relative to their size in scene units (below 1 for quick previews; effects
     /// that measure in pixels then look a little different). Without `particles`, particle systems aren't drawn.
+    /// `timeOfDay` (0…1 from midnight) is the time the scene shows; its clock stands still at it.
     public init(document: SceneDocument, files: SceneFiles, width: Int, height: Int, bufferScale: Double = 1,
-                particles: Bool = true, device: MTLDevice? = nil) throws {
+                particles: Bool = true, timeOfDay: Double = 0.5, device: MTLDevice? = nil) throws {
         guard let device = device ?? MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
             throw SceneError.unsupported("Rendering without Metal")
         }
@@ -84,9 +95,14 @@ public final class SceneRenderer {
             SIMD4(0, 0, 1e-6, 0), SIMD4(-w * scale / Float(width), -h * scale / Float(height), 0.5, 1)))
 
         var issues = Set<String>()
+        objectsByID = Dictionary(document.objects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         items = Self.items(of: document, files: files, bufferScale: min(max(bufferScale, 0.05), 1), particles: particles,
                            issues: &issues)
         self.issues = issues
+        self.timeOfDay = min(max(timeOfDay, 0), 1)
+        clockStart = Calendar.current.startOfDay(for: .now).addingTimeInterval(self.timeOfDay * 86_400)
+        scripts = document.scripts.isEmpty ? nil : SceneScripts(document: document, screen: SIMD2(width, height),
+                                                                timeOfDay: self.timeOfDay, clockStart: clockStart)
     }
 
     // MARK: - Layers and particle systems
@@ -96,48 +112,39 @@ public final class SceneRenderer {
         case particles(Particles)
     }
 
+    /// Objects are kept whether they show or not: scripts can show and move them from frame to frame (see `placement`).
     private struct Particles {
-        let name: String
+        let object: SceneDocument.Object
         let system: ParticleSystem
-        /// System units → scene units.
-        let world: simd_float4x4
     }
 
     private struct Layer {
-        let id: Int
-        let name: String
+        let object: SceneDocument.Object
         let image: SceneDocument.ImageLayer
-        /// Layer units → scene units.
-        let world: simd_float4x4
+        /// Covers the canvas wherever the layer is.
+        let fullscreen: Bool
         /// The quad in layer units: top left, top right, bottom left, bottom right.
         let corners: [SIMD2<Float>]
         /// The size of the layer's buffers in pixels.
         let size: SIMD2<Int>
         /// The layer shows the scene behind it (compose, fullscreen and project layers).
         let compose: Bool
+        /// Effects with passes, shown or not (scripts can switch them).
         let effects: [SceneDocument.Effect]
-        let needsBackground: Bool
+        let readsScene: Bool
         /// Another layer reads this one's result (`_rt_imageLayerComposite_<id>_a`), so it's kept until the frame ends.
         let isReferenced: Bool
+
+        var id: Int { object.id }
+        var name: String { object.name }
     }
 
     private static func items(of document: SceneDocument, files: SceneFiles, bufferScale: Double, particles: Bool,
                               issues: inout Set<String>) -> [Item] {
         let byID = Dictionary(document.objects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        func local(_ t: SceneDocument.Transform) -> simd_float4x4 {
-            let c = Float(cos(t.angles.z)), s = Float(sin(t.angles.z))
-            let translation = simd_float4x4(columns: (SIMD4(1, 0, 0, 0), SIMD4(0, 1, 0, 0), SIMD4(0, 0, 1, 0),
-                                                       SIMD4(Float(t.origin.x), Float(t.origin.y), Float(t.origin.z), 1)))
-            let rotation = simd_float4x4(columns: (SIMD4(c, s, 0, 0), SIMD4(-s, c, 0, 0), SIMD4(0, 0, 1, 0), SIMD4(0, 0, 0, 1)))
-            let scale = simd_float4x4(diagonal: SIMD4(Float(t.scale.x), Float(t.scale.y), Float(t.scale.z), 1))
-            return translation * rotation * scale
-        }
-        // Parents' transforms apply to their children; a hidden parent hides them.
-        func placement(_ object: SceneDocument.Object, depth: Int = 0) -> (world: simd_float4x4, visible: Bool) {
-            let own = local(object.transform)
-            guard let id = object.parent, let parent = byID[id], parent.id != object.id, depth < 32 else { return (own, object.visible) }
-            let above = placement(parent, depth: depth + 1)
-            return (above.world * own, above.visible && object.visible)
+        func shows(_ object: SceneDocument.Object, depth: Int = 0) -> Bool {
+            guard let id = object.parent, let parent = byID[id], parent.id != object.id, depth < 32 else { return object.visible }
+            return object.visible && shows(parent, depth: depth + 1)
         }
 
         // Names of the textures and buffers each image layer's passes read.
@@ -160,47 +167,59 @@ public final class SceneRenderer {
         for object in document.objects {
             switch object.kind {
             case .image(let image):
-                var (world, visible) = placement(object)
-                guard visible else { continue }
                 var size = image.size ?? SIMD2(image.model.width ?? 0, image.model.height ?? 0)
-                if image.model.fullscreen {
-                    size = SIMD2(document.general.width, document.general.height)
-                    world = simd_float4x4(columns: (SIMD4(1, 0, 0, 0), SIMD4(0, 1, 0, 0), SIMD4(0, 0, 1, 0),
-                                                    SIMD4(Float(size.x / 2), Float(size.y / 2), 0, 1)))
-                }
+                if image.model.fullscreen { size = SIMD2(document.general.width, document.general.height) }
                 guard size.x >= 1, size.y >= 1 else {
-                    issues.insert("Layer “\(object.name)” has no size")
+                    if shows(object) { issues.insert("Layer “\(object.name)” has no size") }
                     continue
                 }
                 let w = Float(size.x), h = Float(size.y)
                 let alignment = image.alignment.lowercased()
                 let left: Float = alignment.contains("left") ? 0 : alignment.contains("right") ? -w : -w / 2
                 let bottom: Float = alignment.contains("top") ? -h : alignment.contains("bottom") ? 0 : -h / 2
-                let effects = image.effects.filter { $0.visible && !$0.passes.isEmpty }
-                let names = reads[object.id] ?? []
-                let compose = image.model.compose
                 items.append(.layer(Layer(
-                    id: object.id, name: object.name, image: image, world: world,
+                    object: object, image: image, fullscreen: image.model.fullscreen,
                     corners: [SIMD2(left, bottom + h), SIMD2(left + w, bottom + h), SIMD2(left, bottom), SIMD2(left + w, bottom)],
                     size: SIMD2(min(8192, max(1, Int((size.x * bufferScale).rounded()))),
                                 min(8192, max(1, Int((size.y * bufferScale).rounded())))),
-                    compose: compose, effects: effects,
-                    needsBackground: (compose && !effects.isEmpty) || image.colorBlendMode != 0 || names.contains("_rt_FullFrameBuffer"),
+                    compose: image.model.compose, effects: image.effects.filter { !$0.passes.isEmpty },
+                    readsScene: (reads[object.id] ?? []).contains("_rt_FullFrameBuffer"),
                     isReferenced: referenced.contains(object.id))))
             case .particle(let particle):
-                let (world, visible) = placement(object)
-                guard visible, particles else { continue }
+                guard particles else { continue }
                 let system = ParticleSystem(definition: particle.definition, overrides: .init(particle.instanceOverride),
                                             seed: UInt64(UInt32(truncatingIfNeeded: object.id)) &+ 1) { path in
                     (try? files.json(path))?.resolvedDeep(document.properties)
                 }
-                for feature in system.unsupported { issues.insert("Particles “\(object.name)”: \(feature) isn't simulated") }
-                items.append(.particles(Particles(name: object.name, system: system, world: world)))
+                if shows(object) {
+                    for feature in system.unsupported { issues.insert("Particles “\(object.name)”: \(feature) isn't simulated") }
+                }
+                items.append(.particles(Particles(object: object, system: system)))
             default:
                 break
             }
         }
         return items
+    }
+
+    /// Where an object is (object units → scene units) and whether it shows this frame: its transform and visibility,
+    /// or what scripts set, under its parents'. A hidden parent hides its children.
+    private func placement(_ object: SceneDocument.Object, depth: Int = 0) -> (world: simd_float4x4, visible: Bool) {
+        let own = state[object.id]
+        let local = Self.matrix(own?.transform ?? object.transform)
+        let visible = own?.visible ?? object.visible
+        guard let id = object.parent, let parent = objectsByID[id], parent.id != object.id, depth < 32 else { return (local, visible) }
+        let above = placement(parent, depth: depth + 1)
+        return (above.world * local, above.visible && visible)
+    }
+
+    private static func matrix(_ t: SceneDocument.Transform) -> simd_float4x4 {
+        let c = Float(cos(t.angles.z)), s = Float(sin(t.angles.z))
+        let translation = simd_float4x4(columns: (SIMD4(1, 0, 0, 0), SIMD4(0, 1, 0, 0), SIMD4(0, 0, 1, 0),
+                                                   SIMD4(Float(t.origin.x), Float(t.origin.y), Float(t.origin.z), 1)))
+        let rotation = simd_float4x4(columns: (SIMD4(c, s, 0, 0), SIMD4(-s, c, 0, 0), SIMD4(0, 0, 1, 0), SIMD4(0, 0, 0, 1)))
+        let scale = simd_float4x4(diagonal: SIMD4(Float(t.scale.x), Float(t.scale.y), Float(t.scale.z), 1))
+        return translation * rotation * scale
     }
 
     // MARK: - Frames
@@ -211,11 +230,16 @@ public final class SceneRenderer {
         guard let commands = queue.makeCommandBuffer() else { throw SceneError.unsupported("Rendering without Metal") }
         if let loop, loop.period > 0 {
             let t = time - (time / loop.period).rounded(.down) * loop.period
-            encode(time: t, into: target, commands: commands)
+            encode(time: t, into: target, commands: commands, scripts: scripts)
             if t < loop.crossfade {
-                // Fade in from one period later, which is where the previous period ended.
+                // Fade in from one period later, which is where the previous period ended. Its scripts run apart, so
+                // neither run has to go back in time.
                 let later = crossfadeTarget()
-                encode(time: t + loop.period, into: later, commands: commands)
+                if laterScripts == nil, scripts != nil {
+                    laterScripts = SceneScripts(document: document, screen: SIMD2(width, height), timeOfDay: timeOfDay,
+                                                clockStart: clockStart)
+                }
+                encode(time: t + loop.period, into: later, commands: commands, scripts: laterScripts)
                 let pass = MTLRenderPassDescriptor()
                 pass.colorAttachments[0].texture = target
                 pass.colorAttachments[0].loadAction = .load
@@ -231,7 +255,7 @@ public final class SceneRenderer {
                 }
             }
         } else {
-            encode(time: time, into: target, commands: commands)
+            encode(time: time, into: target, commands: commands, scripts: scripts)
         }
         commands.commit()
         commands.waitUntilCompleted()
@@ -252,8 +276,9 @@ public final class SceneRenderer {
         return texture
     }
 
-    /// Encodes the scene at `time` into `output`.
-    private func encode(time: Double, into output: MTLTexture, commands: MTLCommandBuffer) {
+    /// Encodes the scene at `time` into `output`, with the values `scripts` set by then.
+    private func encode(time: Double, into output: MTLTexture, commands: MTLCommandBuffer, scripts: SceneScripts?) {
+        state = scripts?.advance(to: time) ?? [:]
         let c = document.general.clearColor
         let frame = Frame(commands: commands, target: output,
                           clear: MTLClearColor(red: Double(c.x), green: Double(c.y), blue: Double(c.z), alpha: 1))
@@ -261,8 +286,10 @@ public final class SceneRenderer {
             switch item {
             case .layer(let layer): draw(layer, time: time, frame: frame)
             case .particles(let particles):
+                let (world, visible) = placement(particles.object)
+                guard visible else { continue }
                 particles.system.advance(to: time)
-                draw(particles.system, name: particles.name, world: particles.world, time: time, frame: frame)
+                draw(particles.system, name: particles.object.name, world: world, time: time, frame: frame)
             }
         }
         _ = frame.scene()
@@ -335,31 +362,44 @@ public final class SceneRenderer {
     private func draw(_ layer: Layer, time: Double, frame: Frame) {
         let image = layer.image
         guard let pass = image.material.passes.first else { return }
+        var (world, visible) = placement(layer.object)
+        guard visible else { return }
+        if layer.fullscreen {
+            world = simd_float4x4(columns: (SIMD4(1, 0, 0, 0), SIMD4(0, 1, 0, 0), SIMD4(0, 0, 1, 0),
+                                            SIMD4(Float(document.general.width / 2), Float(document.general.height / 2), 0, 1)))
+        }
+        let own = state[layer.id]
+        let effects = layer.effects.filter { effect in
+            guard let shown = own?.effectsVisible, effect.index < shown.count else { return effect.visible }
+            return shown[effect.index]
+        }
         // A compose layer without effects would put the scene back onto itself.
-        if layer.compose && layer.effects.isEmpty && image.colorBlendMode == 0 { return }
-        if layer.needsBackground {
+        if layer.compose && effects.isEmpty && image.colorBlendMode == 0 { return }
+        if (layer.compose && !effects.isEmpty) || image.colorBlendMode != 0 || layer.readsScene {
             frame.endScene()
             if let blit = frame.commands.makeBlitCommandEncoder() {
                 blit.copy(from: frame.target, to: background)
                 blit.endEncoding()
             }
         }
-        let color = SIMD4<Float>(SIMD3<Float>(image.color) * Float(image.brightness), Float(min(max(image.alpha, 0), 1)))
+        let alpha = own?.alpha ?? image.alpha
+        let color = SIMD4<Float>(SIMD3<Float>(own?.color ?? image.color) * Float(own?.brightness ?? image.brightness),
+                                 Float(min(max(alpha.isFinite ? alpha : 1, 0), 1)))
         let isCoreShader = files.isCore("shaders/\(pass.shader).vert")
-        let onScreen = projection * layer.world
+        let onScreen = projection * world
 
         do {
-            if !layer.compose && layer.effects.isEmpty && image.colorBlendMode == 0 && isCoreShader {
+            if !layer.compose && effects.isEmpty && image.colorBlendMode == 0 && isCoreShader {
                 guard let base = baseTexture(pass, layer: layer, time: time) else { return }
                 let pipeline = try pipelines.pipeline(pipelines.program("aerialswap/image"), combos: [:], blending: SceneBlending(pass.blending))
                 draw(pipeline, encoder: frame.scene(), vertices: quad(layer.corners, base.uvs), slots: [0: base.binding],
-                     system: system(mvp: onScreen, model: layer.world, color: color, time: time))
+                     system: system(mvp: onScreen, model: world, color: color, time: time))
                 return
             }
-            guard let result = try renderLayer(layer, pass: pass, time: time, frame: frame) else { return }
+            guard let result = try renderLayer(layer, pass: pass, world: world, effects: effects, time: time, frame: frame) else { return }
             defer { if layer.isReferenced { composites[layer.id] = result } else { give(result) } }
             let uvs = rectangle(SIMD4(0, 0, 1, 1))
-            let system = system(mvp: onScreen, model: layer.world, color: color, time: time)
+            let system = system(mvp: onScreen, model: world, color: color, time: time)
             if image.colorBlendMode != 0 {
                 let pipeline = try pipelines.pipeline(pipelines.program("aerialswap/blendimage"),
                                                       combos: ["BLENDMODE": image.colorBlendMode], blending: .none)
@@ -375,8 +415,9 @@ public final class SceneRenderer {
         }
     }
 
-    /// Draws the layer's material and runs its effects in the layer's buffers; returns the buffer holding the result.
-    private func renderLayer(_ layer: Layer, pass: SceneDocument.MaterialPass, time: Double, frame: Frame) throws -> MTLTexture? {
+    /// Draws the layer's material and runs `effects` in the layer's buffers; returns the buffer holding the result.
+    private func renderLayer(_ layer: Layer, pass: SceneDocument.MaterialPass, world: simd_float4x4, effects: [SceneDocument.Effect],
+                             time: Double, frame: Frame) throws -> MTLTexture? {
         let size = layer.size
         var current = take(size)
         let identity = system(mvp: matrix_identity_float4x4, model: matrix_identity_float4x4, color: .one, time: time)
@@ -384,7 +425,7 @@ public final class SceneRenderer {
         if layer.compose {
             // The scene behind the layer, where the layer's corners land on screen.
             let uvs = layer.corners.map { corner -> SIMD2<Float> in
-                let p = projection * layer.world * SIMD4(corner.x, corner.y, 0, 1)
+                let p = projection * world * SIMD4(corner.x, corner.y, 0, 1)
                 return SIMD2((p.x / p.w + 1) / 2, (1 - p.y / p.w) / 2)
             }
             let pipeline = try pipelines.pipeline(pipelines.program("aerialswap/image"), combos: [:], blending: .none)
@@ -406,7 +447,7 @@ public final class SceneRenderer {
             encoder.endEncoding()
         }
 
-        for effect in layer.effects {
+        for effect in effects {
             var declared: [String: MTLTexture] = [:]
             for b in effect.buffers {
                 declared[b.name] = take(SIMD2(max(1, Int(Double(size.x) / b.scale)), max(1, Int(Double(size.y) / b.scale))))
@@ -442,7 +483,8 @@ public final class SceneRenderer {
                     let output = named ?? take(size)
                     let encoder = frame.offscreen(output)
                     draw(pipeline, encoder: encoder, vertices: clipQuad(rectangle(SIMD4(0, 0, 1, 1))), slots: inputs.slots,
-                         constants: material.constants, system: identity)
+                         constants: constants(material.constants, object: layer.id, effect: effect.index, pass: effectPass.instance),
+                         system: identity)
                     encoder.endEncoding()
                     if named == nil {
                         if current !== input { give(current) }
@@ -454,6 +496,15 @@ public final class SceneRenderer {
             }
         }
         return current
+    }
+
+    /// A pass's constants with the values scripts set this frame.
+    private func constants(_ base: [String: SceneJSON], object: Int, effect: Int, pass: Int?) -> [String: SceneJSON] {
+        guard let pass, let values = state[object]?.values, !values.isEmpty else { return base }
+        let prefix = "effects/\(effect)/passes/\(pass)/constantshadervalues/"
+        var result = base
+        for (path, value) in values where path.hasPrefix(prefix) { result[String(path.dropFirst(prefix.count))] = value }
+        return result
     }
 
     /// The layer's own texture (its material's first slot) as it shows at `time`, and the texture coordinates of its
@@ -693,7 +744,7 @@ public final class SceneRenderer {
             "g_ModelViewProjectionMatrix": mvp.floats, "g_ModelViewProjectionMatrixInverse": mvp.inverse.floats,
             "g_ModelMatrix": model.floats, "g_ModelMatrixInverse": model.inverse.floats,
             "g_ViewProjectionMatrix": projection.floats,
-            "g_Time": [Float(time)], "g_FrameTime": [1 / 60], "g_Daytime": [0.5],
+            "g_Time": [Float(time)], "g_FrameTime": [1 / 60], "g_Daytime": [Float(timeOfDay)],
             "g_Color4": [color.x, color.y, color.z, color.w], "g_Color": [color.x, color.y, color.z],
             "g_Alpha": [color.w], "g_UserAlpha": [color.w], "g_Brightness": [1],
             "g_PointerPosition": [0.5, 0.5], "g_PointerPositionLast": [0.5, 0.5], "g_ParallaxPosition": [0.5, 0.5],

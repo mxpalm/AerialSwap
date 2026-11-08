@@ -23,6 +23,9 @@ public enum SceneLimits {
     /// Shader source after includes, in bytes, and how deep includes may nest.
     public static let maxShaderBytes = 1 << 20
     public static let maxIncludeDepth = 8
+    /// Scripts in one scene, and the size of one.
+    public static let maxScripts = 1024
+    public static let maxScriptBytes = 256 << 10
     /// JSON nesting depth.
     public static let maxJSONDepth = 64
 }

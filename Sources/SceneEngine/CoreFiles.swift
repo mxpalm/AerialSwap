@@ -176,7 +176,9 @@ public enum CoreFiles {
         """
 
     /// Photoshop-style blend modes. `ApplyBlending(mode, base, blend, opacity)` takes the editor's blend mode index,
-    /// in the order Wallpaper Engine's editor lists them; other indices (the tint effect defaults to 30) mix normally.
+    /// in the order Wallpaper Engine's editor lists them. 30 and 31 lie past that list: the tint effect defaults to 30 and
+    /// bloom's composite to 31, read here as a multiplying tint and an add (a white tint, its usual default, then changes
+    /// nothing, and bloom brightens). Other indices mix normally.
     static let blendingH = """
         #ifndef AS_BLENDING_H
         #define AS_BLENDING_H
@@ -258,6 +260,8 @@ public enum CoreFiles {
             else if (mode == 27) r = BlendLuminosity(a, b);
             else if (mode == 28) r = BlendDarkerColor(a, b);
             else if (mode == 29) r = BlendLighterColor(a, b);
+            else if (mode == 30) r = BlendMultiply(a, b);
+            else if (mode == 31) r = BlendAdd(a, b);
             return mix(a, r, opacity);
         }
         #endif

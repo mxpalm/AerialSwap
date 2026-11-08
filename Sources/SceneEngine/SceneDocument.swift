@@ -120,6 +120,8 @@ public struct SceneDocument: Sendable {
     }
 
     public struct Effect: Sendable {
+        /// Position in the object's effect list in scene.json (scripts address effects by it).
+        public let index: Int
         public let file: String
         public let name: String
         public let visible: Bool
@@ -138,6 +140,21 @@ public struct SceneDocument: Sendable {
         /// "copy" or "swap" passes move buffers instead of drawing.
         public let command: String?
         public let source: String?
+        /// Which of the effect instance's pass overrides applies (passes with a material count, in order).
+        public let instance: Int?
+    }
+
+    /// A SceneScript: JavaScript that computes one of an object's values every frame (see SceneScripts).
+    public struct Script: Sendable {
+        public let object: Int
+        /// Where the value is below the object: "origin", "effects/0/visible",
+        /// "effects/0/passes/1/constantshadervalues/strength".
+        public let path: String
+        public let source: String
+        /// The saved value, used until the script changes it.
+        public let value: SceneJSON
+        /// The script's own settings (`scriptproperties`), with property bindings resolved.
+        public let properties: [String: SceneJSON]
     }
 
     public struct Buffer: Sendable {
@@ -154,8 +171,8 @@ public struct SceneDocument: Sendable {
     public let properties: [String: SceneJSON]
     /// Files the scene names that neither the wallpaper nor AerialSwap's core has.
     public let missingFiles: Set<String>
-    /// Values a SceneScript computes (`{"script": …, "value": …}`); they keep their saved value.
-    public let scriptedValues: Int
+    /// Values a SceneScript computes (`{"script": …, "value": …}`), in scene order.
+    public let scripts: [Script]
 
     /// Loads `project.file` (normally scene.json) and everything it references. `overrides` replace the project's
     /// property values (the user's choices in AerialSwap).
@@ -164,7 +181,6 @@ public struct SceneDocument: Sendable {
         let properties = project.values.merging(overrides) { _, new in new }
         self.properties = properties
         let raw = try files.json(project.file)
-        scriptedValues = raw.count { $0["script"] != nil }
         let scene = raw.resolvedDeep(properties)
         var loader = Loader(files: files, properties: properties)
 
@@ -194,6 +210,41 @@ public struct SceneDocument: Sendable {
         guard list.count <= SceneLimits.maxObjects else { throw SceneError.tooLarge("The scene's object list") }
         objects = list.compactMap { loader.object($0) }
         missingFiles = loader.missing
+        scripts = try Self.scripts(in: raw["objects"]?.array ?? [], properties: properties)
+    }
+
+    /// The scripts in the objects' values, with where each value is.
+    private static func scripts(in objects: [SceneJSON], properties: [String: SceneJSON]) throws -> [Script] {
+        var scripts: [Script] = []
+        func walk(_ value: SceneJSON, object: Int, path: [String], depth: Int) throws {
+            guard depth < SceneLimits.maxJSONDepth else { return }
+            switch value {
+            case .object(let dictionary):
+                if let source = dictionary["script"]?.string {
+                    guard scripts.count < SceneLimits.maxScripts, source.utf8.count <= SceneLimits.maxScriptBytes else {
+                        throw SceneError.tooLarge("The scene's scripts")
+                    }
+                    scripts.append(Script(object: object, path: path.joined(separator: "/"), source: source,
+                                          value: (dictionary["value"] ?? .null).resolvedDeep(properties),
+                                          properties: dictionary["scriptproperties"]?.resolvedDeep(properties).object ?? [:]))
+                    return
+                }
+                for key in dictionary.keys.sorted() {
+                    try walk(dictionary[key]!, object: object, path: path + [key], depth: depth + 1)
+                }
+            case .array(let array):
+                for (index, element) in array.enumerated() {
+                    try walk(element, object: object, path: path + [String(index)], depth: depth + 1)
+                }
+            default:
+                break
+            }
+        }
+        for object in objects {
+            guard let id = object["id"]?.number else { continue }
+            try walk(object, object: Int(id), path: [], depth: 0)
+        }
+        return scripts
     }
 
     static func bounded(_ value: Double?, default fallback: Double, range: ClosedRange<Double> = 1 ... 65_536) -> Double {
@@ -259,7 +310,7 @@ public struct SceneDocument: Sendable {
             var material = model.materialPath.flatMap { self.material($0) } ?? Material(passes: [])
             // The image's own "instance" overrides apply to its material's first pass.
             if let instance = o["instance"], !material.passes.isEmpty { Self.apply(instance, to: &material.passes[0]) }
-            let effects = (o["effects"]?.array ?? []).prefix(SceneLimits.maxEffects).compactMap { effect($0) }
+            let effects = (o["effects"]?.array ?? []).prefix(SceneLimits.maxEffects).enumerated().compactMap { effect($1, index: $0) }
             let size = o["size"]?.vector.flatMap { $0.count >= 2 ? SIMD2($0[0], $0[1]) : nil }
             let color = o["color"]?.vector.flatMap { $0.count >= 3 ? SIMD3($0[0], $0[1], $0[2]) : nil } ?? .one
             return ImageLayer(
@@ -285,7 +336,7 @@ public struct SceneDocument: Sendable {
             for (key, value) in override["usertextures"]?.object ?? [:] { pass.userTextures[key] = value }
         }
 
-        mutating func effect(_ e: SceneJSON) -> Effect? {
+        mutating func effect(_ e: SceneJSON, index: Int) -> Effect? {
             guard let file = e["file"]?.string, let json = json(file) else { return nil }
             let overrides = e["passes"]?.array ?? []
             var materialIndex = 0
@@ -293,10 +344,12 @@ public struct SceneDocument: Sendable {
                 let materialPath = p["material"]?.string
                 var material = materialPath.flatMap { self.material($0) }
                 // Instance overrides follow the effect's material passes in order.
+                var instance: Int?
                 if materialPath != nil {
                     if materialIndex < overrides.count, material?.passes.isEmpty == false {
                         Self.apply(overrides[materialIndex], to: &material!.passes[0])
                     }
+                    instance = materialIndex
                     materialIndex += 1
                 }
                 let binds = (p["bind"]?.array ?? []).compactMap { b -> (String, Int)? in
@@ -304,30 +357,20 @@ public struct SceneDocument: Sendable {
                     return (name, Int(index))
                 }
                 return EffectPass(materialPath: materialPath, material: material, target: p["target"]?.string,
-                                  binds: binds, command: p["command"]?.string, source: p["source"]?.string)
+                                  binds: binds, command: p["command"]?.string, source: p["source"]?.string, instance: instance)
             }
             let buffers = (json["fbos"]?.array ?? []).compactMap { f -> Buffer? in
                 guard let name = f["name"]?.string else { return nil }
                 return Buffer(name: name, scale: SceneDocument.bounded(f["scale"]?.number, default: 1, range: 1 ... 64),
                               format: f["format"]?.string ?? "rgba8888")
             }
-            return Effect(file: file, name: json["name"]?.string ?? e["name"]?.string ?? "", visible: e["visible"]?.bool ?? true,
+            return Effect(index: index, file: file, name: json["name"]?.string ?? e["name"]?.string ?? "", visible: e["visible"]?.bool ?? true,
                           passes: passes, buffers: buffers)
         }
     }
 }
 
 extension SceneJSON {
-    /// How many values at or below this one match.
-    func count(where matches: (SceneJSON) -> Bool) -> Int {
-        let own = matches(self) ? 1 : 0
-        switch self {
-        case .object(let dictionary): return own + dictionary.values.reduce(0) { $0 + $1.count(where: matches) }
-        case .array(let array): return own + array.reduce(0) { $0 + $1.count(where: matches) }
-        default: return own
-        }
-    }
-
     /// The value with every property binding inside it resolved, all the way down.
     func resolvedDeep(_ properties: [String: SceneJSON]) -> SceneJSON {
         let value = resolved(properties)

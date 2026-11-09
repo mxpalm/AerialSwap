@@ -13,6 +13,8 @@ final class SceneSetup {
     /// The current values, by property ID.
     private(set) var values: [String: SceneJSON]
     var fps = 60
+    /// How the scene fills the screen (the main display's shape); the preview shows it without restarting.
+    var framing = SceneFraming(screenAspect: SceneSetup.screenAspect)
     /// The newest preview frame, and why the preview stopped when it did.
     var frame: NSImage?   // set by the preview (and Snapshot)
     private(set) var previewProblem: String?
@@ -22,6 +24,21 @@ final class SceneSetup {
     @ObservationIgnored private var isPreviewing = false
 
     static let frameRates = [60, 120]
+
+    /// The main display's width / height (the wallpaper fills it, cutting the video to that shape).
+    static var screenAspect: Double {
+        guard let size = NSScreen.screens.first?.frame.size, size.width > 0, size.height > 0 else { return 16.0 / 9 }
+        return size.width / size.height
+    }
+
+    /// Whether the scene, filling the screen, is cut left and right (true) or top and bottom (false); nil when it fits
+    /// the screen as is or its shape isn't known yet (it comes with the first preview frame).
+    var cutsSides: Bool? {
+        guard let size = frame?.size, size.width > 0, size.height > 0, let screen = framing.screenAspect else { return nil }
+        let aspect = size.width / size.height
+        guard abs(aspect / screen - 1) > 0.01 else { return nil }
+        return aspect > screen
+    }
 
     init(scene: WorkshopScene, project: SceneProject, verdict: SceneVerdict) {
         self.scene = scene

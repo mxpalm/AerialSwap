@@ -1294,7 +1294,7 @@ final class AppModel {
         guard let setup = sceneSetup else { return }
         setup.stopPreview()
         bakeScene(setup.scene.folder, name: displayName ?? setup.scene.title, credit: sourceCredit, fps: setup.fps,
-                  properties: setup.changes, thenShow: thenShow)
+                  properties: setup.changes, framing: setup.framing, thenShow: thenShow)
     }
 
     /// Add Folder…: a Steam folder somewhere else (another bottle, an external disk) or a folder of wallpapers.
@@ -1852,7 +1852,7 @@ final class AppModel {
     /// Renders a Wallpaper Engine scene into a video in a helper process (see SceneBaker), then saves it to the library
     /// like a transcoded video and (optionally) shows it.
     func bakeScene(_ folder: URL, name: String, credit: (credit: String, page: String?)?, fps: Int,
-                   properties: [String: SceneJSON] = [:], thenShow: Bool) {
+                   properties: [String: SceneJSON] = [:], framing: SceneFraming = .fill, thenShow: Bool) {
         guard !isBusy else { return }
         let destination = Self.workDir().appending(path: "\(UUID().uuidString).mov")
         let bake = SceneBakeProcess()
@@ -1867,7 +1867,8 @@ final class AppModel {
 
         Task.detached {
             do {
-                _ = try await bake.run(folder: folder, destination: destination, fps: fps, properties: properties) { p in
+                _ = try await bake.run(folder: folder, destination: destination, fps: fps, properties: properties,
+                                       framing: framing) { p in
                     Task { @MainActor in self.progress = p }
                 }
                 await MainActor.run {

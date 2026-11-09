@@ -25,6 +25,8 @@ public final class SceneRenderer {
     private let target: MTLTexture
     private let background: MTLTexture
     private let projection: simd_float4x4
+    /// Where the scene is in the output when it shows whole and bars are left around it (pixels from the top left).
+    private let wholeRect: SIMD4<Float>?
     private let items: [Item]
     private let objectsByID: [Int: SceneDocument.Object]
     /// The scene's scripts (nil without any), and a second run of them for the frame a loop's crossfade draws.
@@ -60,9 +62,10 @@ public final class SceneRenderer {
 
     /// `bufferScale` sizes the layers' buffers relative to their size in scene units (below 1 for quick previews; effects
     /// that measure in pixels then look a little different). Without `particles`, particle systems aren't drawn.
-    /// `timeOfDay` (0…1 from midnight) is the time the scene shows; its clock stands still at it.
+    /// `timeOfDay` (0…1 from midnight) is the time the scene shows; its clock stands still at it. `framing` places the
+    /// scene in the output.
     public init(document: SceneDocument, files: SceneFiles, width: Int, height: Int, bufferScale: Double = 1,
-                particles: Bool = true, timeOfDay: Double = 0.5, device: MTLDevice? = nil) throws {
+                particles: Bool = true, timeOfDay: Double = 0.5, framing: SceneFraming = .fill, device: MTLDevice? = nil) throws {
         guard let device = device ?? MTLCreateSystemDefaultDevice(), let queue = device.makeCommandQueue() else {
             throw SceneError.unsupported("Rendering without Metal")
         }
@@ -87,12 +90,18 @@ public final class SceneRenderer {
         target = try canvas(.shared)
         background = try canvas(.private)
 
-        // Aspect fill: the canvas covers the output, centered. z is kept (barely) so the matrix stays invertible.
-        let w = Float(document.general.width), h = Float(document.general.height)
-        let scale = max(Float(width) / w, Float(height) / h)
+        // The canvas where the framing puts it (scene y runs up, from its bottom edge). z is kept (barely) so the matrix
+        // stays invertible.
+        let place = framing.placement(scene: SIMD2(document.general.width, document.general.height),
+                                      width: Double(width), height: Double(height))
+        let w = Float(document.general.width), h = Float(document.general.height), scale = Float(place.scale)
+        let left = Float(place.x), top = Float(place.y)
         projection = simd_float4x4(columns: (
             SIMD4(2 * scale / Float(width), 0, 0, 0), SIMD4(0, 2 * scale / Float(height), 0, 0),
-            SIMD4(0, 0, 1e-6, 0), SIMD4(-w * scale / Float(width), -h * scale / Float(height), 0.5, 1)))
+            SIMD4(0, 0, 1e-6, 0), SIMD4(2 * left / Float(width) - 1, 1 - 2 * (top + h * scale) / Float(height), 0.5, 1)))
+        let rect = SIMD4(left, top, w * scale, h * scale)
+        let covers = rect.x <= 0.5 && rect.y <= 0.5 && rect.x + rect.z >= Float(width) - 0.5 && rect.y + rect.w >= Float(height) - 0.5
+        wholeRect = framing.mode == .whole && !covers ? rect : nil
 
         var issues = Set<String>()
         objectsByID = Dictionary(document.objects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -300,6 +309,7 @@ public final class SceneRenderer {
         _ = frame.scene()
         frame.endScene()
         if document.general.bloom { bloom(time: time, frame: frame) }
+        if let wholeRect { bars(around: wholeRect, time: time, frame: frame) }
         composites.values.forEach(give)
         composites = [:]
     }
@@ -339,6 +349,51 @@ public final class SceneRenderer {
             frame.endScene()
         } catch {
             issues.insert("Bloom: \(Self.firstLine(error))")
+        }
+        give(current)
+    }
+
+    /// Fills the output around the scene (`rect`, pixels from the top left) with a blurred, darkened copy of it
+    /// stretched to cover the output.
+    private func bars(around rect: SIMD4<Float>, time: Double, frame: Frame) {
+        guard let blit = frame.commands.makeBlitCommandEncoder() else { return }
+        blit.copy(from: frame.target, to: background)
+        blit.endEncoding()
+        let W = Float(width), H = Float(height)
+        // The scene in texture coordinates, and the part of it in the output's shape (centered) that the bars blur.
+        let scene = SIMD4(rect.x / W, rect.y / H, rect.z / W, rect.w / H)
+        let cover = min(rect.z / W, rect.w / H)
+        let crop = SIMD4(rect.x + (rect.z - W * cover) / 2, rect.y + (rect.w - H * cover) / 2, W * cover, H * cover)
+        let identity = system(mvp: matrix_identity_float4x4, model: matrix_identity_float4x4, color: .one, time: time)
+        let size = SIMD2(max(1, width / 8), max(1, height / 8))
+        var current = take(size)
+        do {
+            let copy = try pipelines.pipeline(pipelines.program("aerialswap/image"), combos: [:], blending: .none)
+            var encoder = frame.offscreen(current)
+            draw(copy, encoder: encoder, vertices: clipQuad(rectangle(SIMD4(crop.x / W, crop.y / H, crop.z / W, crop.w / H))),
+                 slots: [0: buffer(background)], system: identity)
+            encoder.endEncoding()
+            let gaussian = try pipelines.program("effects/blur_gaussian")
+            for vertical in [0, 1, 0, 1] {
+                let output = take(size)
+                encoder = frame.offscreen(output)
+                draw(try pipelines.pipeline(gaussian, combos: ["VERTICAL": vertical], blending: .none), encoder: encoder,
+                     vertices: clipQuad(rectangle(SIMD4(0, 0, 1, 1))), slots: [0: buffer(current)],
+                     constants: ["scale": .string("2 2")], system: identity)
+                encoder.endEncoding()
+                give(current)
+                current = output
+            }
+            let target = frame.scene()
+            draw(copy, encoder: target, vertices: clipQuad(rectangle(SIMD4(0, 0, 1, 1))), slots: [0: buffer(current)],
+                 system: system(mvp: matrix_identity_float4x4, model: matrix_identity_float4x4, color: SIMD4(0.6, 0.6, 0.6, 1), time: time))
+            // The scene itself back on top, sharp.
+            let corners = [SIMD2(scene.x, scene.y), SIMD2(scene.x + scene.z, scene.y), SIMD2(scene.x, scene.y + scene.w),
+                           SIMD2(scene.x + scene.z, scene.y + scene.w)].map { SIMD2($0.x * 2 - 1, 1 - $0.y * 2) }
+            draw(copy, encoder: target, vertices: quad(corners, rectangle(scene)), slots: [0: buffer(background)], system: identity)
+            frame.endScene()
+        } catch {
+            issues.insert("Framing: \(Self.firstLine(error))")
         }
         give(current)
     }

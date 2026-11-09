@@ -9,16 +9,30 @@ import SwiftUI
 /// the library or the temp folder.
 @MainActor
 enum Snapshot {
-    /// One frame of a scene, drawn here (snapshots only; the app draws scenes in a helper process).
-    private static func sceneFrame(_ folder: URL) -> NSImage? {
+    /// One frame of a scene in its own shape, 1280 pixels wide, drawn here (snapshots only; the app draws scenes in a
+    /// helper process).
+    private static func sceneFrame(_ folder: URL, time: Double = 2) -> NSImage? {
         guard let project = try? SceneProject(folder: folder), let files = try? SceneFiles(folder: folder, entry: project.file),
-              let document = try? SceneDocument(files: files, project: project),
-              let renderer = try? SceneRenderer(document: document, files: files, width: 1280, height: 720),
-              let texture = try? renderer.render(time: 2),
+              let document = try? SceneDocument(files: files, project: project) else { return nil }
+        let width = 1280, height = max(1, Int((1280 * document.general.height / max(document.general.width, 1)).rounded()))
+        guard let renderer = try? SceneRenderer(document: document, files: files, width: width, height: height),
+              let texture = try? renderer.render(time: time),
               let image = CIImage(mtlTexture: texture, options: [.colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!])?
-                .transformed(by: CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: -720)),
+                .transformed(by: CGAffineTransform(scaleX: 1, y: -1).translatedBy(x: 0, y: -CGFloat(height))),
               let cg = CIContext().createCGImage(image, from: image.extent) else { return nil }
-        return NSImage(cgImage: cg, size: NSSize(width: 1280, height: 720))
+        return NSImage(cgImage: cg, size: NSSize(width: width, height: height))
+    }
+
+    /// Configure for a scene Steam downloaded on this Mac, framed for a MacBook Pro screen.
+    private static func sceneSetup(_ m: AppModel, id: String, time: Double = 2, _ change: (SceneSetup) -> Void = { _ in }) {
+        guard let scene = WallpaperEngine.downloadedScene(id: id), let project = try? SceneProject(folder: scene.folder) else { return }
+        m.clearSource()
+        m.displayName = scene.title
+        let setup = SceneSetup(scene: scene, project: project, verdict: SceneVerdict(folder: scene.folder))
+        setup.framing.screenAspect = 3024.0 / 1964
+        setup.frame = sceneFrame(scene.folder, time: time)
+        change(setup)
+        m.sceneSetup = setup
     }
 
     static func run(_ args: [String]) async -> Int32 {
@@ -116,15 +130,11 @@ enum Snapshot {
             ("06b-configure-scene", { m in
                 // A scene Steam downloaded on this Mac, when there is one (Mario Kart DS - Credits has every kind of setting).
                 m.enhanceDetail = false
-                guard let scene = WallpaperEngine.downloadedScene(id: "3190894366"),
-                      let project = try? SceneProject(folder: scene.folder) else { return }
-                m.clearSource()
-                m.displayName = scene.title
-                let setup = SceneSetup(scene: scene, project: project, verdict: SceneVerdict(folder: scene.folder))
-                setup.frame = sceneFrame(scene.folder)
-                setup.set("dsscanlinefilter", .bool(true))
-                m.sceneSetup = setup
+                sceneSetup(m, id: "3190894366") { $0.set("dsscanlinefilter", .bool(true)) }
             }),
+            // A 21:9 scene filling the screen, its left side shown; a 16:9 one whole, with bars.
+            ("06c-configure-scene-fill", { m in sceneSetup(m, id: "3269762902", time: 60) { $0.framing.position = 0.2 } }),
+            ("06d-configure-scene-whole", { m in sceneSetup(m, id: "3526096300") { $0.framing.mode = .whole } }),
             ("07-low-resolution", { m in
                 m.sceneSetup = nil
                 await load(m, footage.appending(path: "src_low30.mov"))

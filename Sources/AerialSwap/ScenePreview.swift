@@ -5,9 +5,10 @@ import SceneEngine
 
 /// The live preview of a scene in Configure: `AerialSwap --preview-scene` renders it small and in real time in its own
 /// process (scenes bring their own shaders and scripts, see SceneBakeProcess) and sends JPEG frames through a pipe.
+/// Frames show the whole canvas in its own shape; Configure frames them as the screen will.
 enum ScenePreview {
-    static let width = 960
-    static let height = 540
+    /// The frames' longer side, in pixels.
+    static let size = 960.0
     static let fps = 30.0
 
     /// What goes through the pipe: a type byte ('F' frame, 'E' error), the payload's length (4 bytes, big endian),
@@ -38,10 +39,14 @@ enum ScenePreview {
 
         let folder = URL(fileURLWithPath: args[1])
         let renderer: SceneRenderer
+        let width: Int, height: Int
         do {
             let project = try SceneProject(folder: folder)
             let files = try SceneFiles(folder: folder, entry: project.file)
             let document = try SceneDocument(files: files, project: project, overrides: options.properties)
+            let aspect = document.general.width / max(document.general.height, 1)
+            (width, height) = aspect >= 1 ? (Int(size), max(1, Int((size / aspect).rounded())))
+                                          : (max(1, Int((size * aspect).rounded())), Int(size))
             renderer = try SceneRenderer(document: document, files: files, width: width, height: height)
         } catch {
             _ = send(UInt8(ascii: "E"), Data("\(error)".utf8))

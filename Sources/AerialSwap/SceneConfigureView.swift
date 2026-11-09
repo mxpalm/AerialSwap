@@ -1,7 +1,8 @@
 import SceneEngine
 import SwiftUI
 
-/// A new scene: full-window live preview, the wallpaper's settings and the frame rate on the right.
+/// A new scene: the live preview in the screen's shape, framed as the wallpaper will be, with the wallpaper's settings,
+/// the framing and the frame rate on the right.
 struct SceneConfigureView: View {
     @Bindable var model: AppModel
     @Bindable var setup: SceneSetup
@@ -10,24 +11,12 @@ struct SceneConfigureView: View {
         ZStack {
             background
             HeaderEdgeEffect()
-            VStack(spacing: 0) {
-                HStack(alignment: .top, spacing: 20) {
-                    Spacer(minLength: 0)
-                    SceneOptionsPanel(model: model, setup: setup).frame(width: 340)
-                }
-                .padding(.horizontal, 18)
-                Spacer(minLength: 16)
-                if let problem = setup.previewProblem {
-                    HStack {
-                        Label("The preview stopped: \(problem)", systemImage: "exclamationmark.triangle")
-                            .font(.system(size: 12)).lineLimit(2)
-                            .padding(.horizontal, 14).padding(.vertical, 10)
-                            .glassPanel(cornerRadius: 14, opacity: 0.62)
-                        Spacer(minLength: 0)
-                    }
-                    .padding(16)
-                }
+            HStack(alignment: .top, spacing: 20) {
+                screen
+                SceneOptionsPanel(model: model, setup: setup).frame(width: 340)
             }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 18)
         }
         .screenToolbar(snapshot: model.isSnapshot) {
             TitleCapsule(title: model.displayName ?? "", detail: "Scene · live preview")
@@ -40,18 +29,50 @@ struct SceneConfigureView: View {
         .onDisappear { setup.stopPreview() }
     }
 
+    /// The window behind it all: the preview blurred, or the scene's picture until the first frame.
     @ViewBuilder private var background: some View {
         if let frame = setup.frame {
             GeometryReader { geo in
-                Image(nsImage: frame).resizable().interpolation(.high).aspectRatio(contentMode: .fill)
+                Image(nsImage: frame).resizable().aspectRatio(contentMode: .fill)
                     .frame(width: geo.size.width, height: geo.size.height).clipped()
+                    .blur(radius: 40, opaque: true)
+                    .overlay(Color.black.opacity(0.35))
             }
             .ignoresSafeArea()
             .overlay(scrim)
-            .accessibilityLabel("Live preview of the scene")
+            .accessibilityHidden(true)
         } else {
             Backdrop(image: model.backdrops["source"])
-                .overlay { ProgressView().controlSize(.large) }
+        }
+    }
+
+    /// The preview as the screen will show it, as big as fits left of the panel.
+    private var screen: some View {
+        GeometryReader { geo in
+            let aspect = CGFloat(setup.framing.screenAspect ?? 16.0 / 9)
+            let width = min(geo.size.width, geo.size.height * aspect), height = width / aspect
+            Group {
+                if let frame = setup.frame {
+                    FramedScene(image: frame, framing: setup.framing)
+                        .accessibilityLabel("Live preview of the scene as your screen will show it")
+                } else {
+                    Color.black.opacity(0.3).overlay { ProgressView().controlSize(.large) }
+                }
+            }
+            .frame(width: width, height: height)
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.white.opacity(0.18)))
+            .shadow(color: .black.opacity(0.4), radius: 18, y: 6)
+            .overlay(alignment: .bottomLeading) {
+                if let problem = setup.previewProblem {
+                    Label("The preview stopped: \(problem)", systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 12)).lineLimit(2)
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                        .glassPanel(cornerRadius: 14, opacity: 0.62)
+                        .padding(12)
+                }
+            }
+            .position(x: width / 2, y: geo.size.height / 2)
         }
     }
 
@@ -62,6 +83,35 @@ struct SceneConfigureView: View {
                               startPoint: .top, endPoint: .bottom)
             .allowsHitTesting(false)
             .ignoresSafeArea()
+    }
+}
+
+/// A preview frame placed in a screen-shaped view the way SceneRenderer places the scene in the video (SceneFraming).
+private struct FramedScene: View {
+    let image: NSImage
+    let framing: SceneFraming
+
+    var body: some View {
+        GeometryReader { geo in
+            let size = image.size
+            // This view is the screen, so the framing's screen shape is its own.
+            let framed = SceneFraming(mode: framing.mode, position: framing.position)
+            let place = framed.placement(scene: SIMD2(size.width, size.height), width: geo.size.width, height: geo.size.height)
+            let w = size.width * place.scale, h = size.height * place.scale
+            ZStack(alignment: .topLeading) {
+                if framing.mode == .whole {
+                    Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
+                        .frame(width: geo.size.width, height: geo.size.height).clipped()
+                        .blur(radius: 24, opaque: true)
+                        .overlay(Color.black.opacity(0.4))
+                }
+                Image(nsImage: image).resizable().interpolation(.high)
+                    .frame(width: w, height: h)
+                    .offset(x: place.x, y: place.y)
+            }
+            .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+            .clipped()
+        }
     }
 }
 
@@ -94,6 +144,7 @@ private struct SceneOptionsPanel: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(RoundedRectangle(cornerRadius: 12).fill(.white.opacity(0.1)))
                 }
+                framing
                 if !setup.properties.isEmpty { settings }
                 frameRate
 
@@ -132,6 +183,24 @@ private struct SceneOptionsPanel: View {
             }
             ForEach(setup.visibleProperties) { property in
                 ScenePropertyRow(property: property, setup: setup)
+            }
+        }
+    }
+
+    private var framing: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            OptionLabel(title: "Framing")
+            PillPicker(options: [.init(value: SceneFraming.Mode.fill, title: "Fill screen", subtitle: "Cuts the edges"),
+                                 .init(value: .whole, title: "Whole scene", subtitle: "Blurred bars")],
+                       selection: $setup.framing.mode, label: "Framing", fill: true)
+            if setup.framing.mode == .fill, let sides = setup.cutsSides {
+                HStack(spacing: 8) {
+                    Text(sides ? "Left" : "Top").font(.system(size: 11)).foregroundStyle(Theme.secondary)
+                    Slider(value: $setup.framing.position, in: 0 ... 1).tint(Theme.accent)
+                        .accessibilityLabel(sides ? "Part shown, left to right" : "Part shown, top to bottom")
+                    Text(sides ? "Right" : "Bottom").font(.system(size: 11)).foregroundStyle(Theme.secondary)
+                }
+                .help("Which part of the scene your screen shows")
             }
         }
     }

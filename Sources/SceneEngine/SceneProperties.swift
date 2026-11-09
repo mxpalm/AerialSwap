@@ -200,3 +200,69 @@ enum SceneCondition {
         return op.hasPrefix("!") ? !equal : equal
     }
 }
+
+extension SceneProject {
+    /// IDs of the settings a video can't honor, so they aren't offered: ones labelled as being about a clock or the
+    /// date, ones that only change live objects (whose scripts read the clock, the music playing, the sound or the
+    /// cursor: clocks, now playing, visualizers; and groups of them), and ones only shown under such a setting. Labels
+    /// decide over IDs: wallpapers reuse IDs (one's "clock" switches butterflies).
+    public func liveSettings(files: SceneFiles) -> Set<String> {
+        guard let raw = try? files.json(file), let objects = raw["objects"]?.array else { return [] }
+        let live = Set(((try? SceneDocument.scripts(in: objects, properties: values)) ?? [])
+            .filter { SceneText.isLive($0.source) }.map(\.object))
+
+        // Live objects, and groups whose objects all are.
+        var children: [Int: [Int]] = [:]
+        var isGroup: [Int: Bool] = [:]
+        for o in objects {
+            guard let id = o["id"]?.number.map({ Int($0) }) else { continue }
+            if let parent = o["parent"]?.number { children[Int(parent), default: []].append(id) }
+            isGroup[id] = ["image", "particle", "text", "sound", "model", "light"].allSatisfy { o[$0] == nil }
+        }
+        var memo: [Int: Bool] = [:]
+        func showsTime(_ id: Int, depth: Int = 0) -> Bool {
+            if let known = memo[id] { return known }
+            guard depth < 32 else { return false }
+            let kids = children[id] ?? []
+            let result = live.contains(id) || (isGroup[id] == true && !kids.isEmpty && kids.allSatisfy { showsTime($0, depth: depth + 1) })
+            memo[id] = result
+            return result
+        }
+
+        // The objects each setting is bound to anywhere in them.
+        var uses: [String: [Int]] = [:]
+        func walk(_ value: SceneJSON, object: Int, depth: Int) {
+            guard depth < SceneLimits.maxJSONDepth else { return }
+            if let binding = value.userBinding { uses[binding.name, default: []].append(object) }
+            switch value {
+            case .object(let dictionary): dictionary.values.forEach { walk($0, object: object, depth: depth + 1) }
+            case .array(let array): array.forEach { walk($0, object: object, depth: depth + 1) }
+            default: break
+            }
+        }
+        for o in objects {
+            guard let id = o["id"]?.number.map({ Int($0) }) else { continue }
+            walk(o, object: id, depth: 0)
+        }
+
+        let clockWords = #"\b(clocks?|date|time ?format|(12|24) ?-?h(ou)?rs?|seconds|weekdays?|calendar|am ?/ ?pm)\b"#
+        var hidden = Set(properties.filter { property in
+            if property.title.range(of: clockWords, options: [.regularExpression, .caseInsensitive]) != nil { return true }
+            guard let objects = uses[property.id], !objects.isEmpty else { return false }
+            return objects.allSatisfy { showsTime($0) }
+        }.map(\.id))
+        // Settings that only show under a hidden one.
+        var changed = true
+        while changed {
+            changed = false
+            for property in properties where !hidden.contains(property.id) {
+                guard let condition = property.condition,
+                      hidden.contains(where: { condition.range(of: #"\b\#(NSRegularExpression.escapedPattern(for: $0))\b"#, options: .regularExpression) != nil })
+                else { continue }
+                hidden.insert(property.id)
+                changed = true
+            }
+        }
+        return hidden
+    }
+}

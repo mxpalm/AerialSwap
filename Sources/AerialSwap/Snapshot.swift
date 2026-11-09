@@ -28,7 +28,8 @@ enum Snapshot {
         guard let scene = WallpaperEngine.downloadedScene(id: id), let project = try? SceneProject(folder: scene.folder) else { return }
         m.clearSource()
         m.displayName = scene.title
-        let setup = SceneSetup(scene: scene, project: project, verdict: SceneVerdict(folder: scene.folder))
+        let hidden = (try? SceneFiles(folder: scene.folder, entry: project.file)).map(project.liveSettings) ?? []
+        let setup = SceneSetup(scene: scene, project: project, verdict: SceneVerdict(folder: scene.folder), hidden: hidden)
         setup.framing.screenAspect = 3024.0 / 1964
         setup.frame = sceneFrame(scene.folder, time: time)
         change(setup)

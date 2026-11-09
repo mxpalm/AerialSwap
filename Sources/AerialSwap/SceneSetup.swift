@@ -44,10 +44,11 @@ final class SceneSetup {
         return aspect > screen
     }
 
-    init(scene: WorkshopScene, project: SceneProject, verdict: SceneVerdict) {
+    /// `hidden`: settings left out because a video can't honor them (SceneProject.liveSettings: clocks, now playing).
+    init(scene: WorkshopScene, project: SceneProject, verdict: SceneVerdict, hidden: Set<String> = []) {
         self.scene = scene
         self.verdict = verdict
-        properties = project.properties.filter(Self.isEditable)
+        properties = project.properties.filter { Self.isEditable($0) && !hidden.contains($0.id) }
         defaults = project.values
         values = project.values
     }

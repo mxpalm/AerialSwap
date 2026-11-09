@@ -1270,17 +1270,21 @@ final class AppModel {
         guard !isBusy else { return }
         showWorkshopImport = false
         Task {
-            let loaded = await Task.detached { () -> Result<(SceneProject, SceneVerdict), Error> in
-                Result { (try SceneProject(folder: scene.folder), SceneVerdict(folder: scene.folder)) }
+            let loaded = await Task.detached { () -> Result<(SceneProject, SceneVerdict, Set<String>), Error> in
+                Result {
+                    let project = try SceneProject(folder: scene.folder)
+                    let hidden = (try? SceneFiles(folder: scene.folder, entry: project.file)).map(project.liveSettings) ?? []
+                    return (project, SceneVerdict(folder: scene.folder), hidden)
+                }
             }.value
             switch loaded {
-            case .success(let (project, verdict)):
+            case .success(let (project, verdict, hidden)):
                 self.sceneVerdicts[scene.id] = verdict
                 guard verdict.canUse else { self.notice = Notice(kind: .error, text: "“\(scene.title)”: \(verdict.detail)"); return }
                 self.clearSource()
                 self.sourceCredit = (credit ?? "a Steam Workshop creator", scene.page?.absoluteString)
                 self.displayName = scene.title
-                self.sceneSetup = SceneSetup(scene: scene, project: project, verdict: verdict)
+                self.sceneSetup = SceneSetup(scene: scene, project: project, verdict: verdict, hidden: hidden)
                 self.steamCopyToRemove = steamCopy   // after clearSource, which forgets the last one
                 if let thumbnail = self.workshopThumbnails[scene.id] { self.backdrops["source"] = thumbnail }
             case .failure(let error):

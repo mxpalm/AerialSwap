@@ -226,7 +226,7 @@ public struct SceneDocument: Sendable {
     }
 
     /// The scripts in the objects' values, with where each value is.
-    private static func scripts(in objects: [SceneJSON], properties: [String: SceneJSON]) throws -> [Script] {
+    static func scripts(in objects: [SceneJSON], properties: [String: SceneJSON]) throws -> [Script] {
         var scripts: [Script] = []
         func walk(_ value: SceneJSON, object: Int, path: [String], depth: Int) throws {
             guard depth < SceneLimits.maxJSONDepth else { return }

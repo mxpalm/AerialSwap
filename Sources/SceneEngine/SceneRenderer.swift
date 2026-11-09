@@ -243,8 +243,9 @@ public final class SceneRenderer {
     public func render(time: Double) throws -> MTLTexture {
         guard let commands = queue.makeCommandBuffer() else { throw SceneError.unsupported("Rendering without Metal") }
         if let loop, loop.period > 0 {
+            // t is the time into the loop; the scene is drawn at loop.start + t.
             let t = time - (time / loop.period).rounded(.down) * loop.period
-            encode(time: t, into: target, commands: commands, scripts: scripts)
+            encode(time: loop.start + t, into: target, commands: commands, scripts: scripts)
             if t < loop.crossfade {
                 // Fade in from one period later, which is where the previous period ended. Its scripts run apart, so
                 // neither run has to go back in time.
@@ -253,7 +254,7 @@ public final class SceneRenderer {
                     laterScripts = SceneScripts(document: document, screen: SIMD2(width, height), timeOfDay: timeOfDay,
                                                 clockStart: clockStart)
                 }
-                encode(time: t + loop.period, into: later, commands: commands, scripts: laterScripts)
+                encode(time: loop.start + t + loop.period, into: later, commands: commands, scripts: laterScripts)
                 let pass = MTLRenderPassDescriptor()
                 pass.colorAttachments[0].texture = target
                 pass.colorAttachments[0].loadAction = .load

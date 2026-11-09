@@ -14,18 +14,19 @@ enum ScenePreview {
     static let fps = 30.0
 
     /// What goes through the pipe: a type byte ('F' frame, 'E' error), the payload's length (4 bytes, big endian),
-    /// then the payload (JPEG data, or the error's text).
+    /// then the payload (for a frame its time in the scene, a big-endian Float64, then JPEG data; or the error's text).
     static func message(_ type: UInt8, _ payload: Data) -> Data {
         var data = Data([type])
         withUnsafeBytes(of: UInt32(payload.count).bigEndian) { data.append(contentsOf: $0) }
         return data + payload
     }
 
-    /// `AerialSwap --preview-scene <folder> [--properties <json>]`, run by ScenePreviewProcess. Renders until its
-    /// output or input closes.
+    /// `AerialSwap --preview-scene <folder> [--properties <json>] [--loop <start>,<length>]`, run by ScenePreviewProcess.
+    /// Renders until its output or input closes; with `--loop` it plays that part of the scene over and over, as the
+    /// video will.
     static func runChild(_ args: [String]) -> Int32 {
         guard args.count >= 2, let options = SceneChildOptions(args.dropFirst(2)) else {
-            print("usage: AerialSwap --preview-scene <folder> [--properties <json>]"); return 2
+            print("usage: AerialSwap --preview-scene <folder> [--properties <json>] [--loop <start>,<length>]"); return 2
         }
         signal(SIGPIPE, SIG_IGN)   // a closed pipe ends the loop below instead of killing the process
         // The app closes the pipe to stop it (and it closes when the app quits).
@@ -53,6 +54,9 @@ enum ScenePreview {
             w *= shrink; h *= shrink
             (width, height) = (max(1, Int(w.rounded())), max(1, Int(h.rounded())))
             renderer = try SceneRenderer(document: document, files: files, width: width, height: height)
+            if let part = options.part {
+                renderer.loop = try SceneLoop.chosen(start: part.start, period: part.length, document: document, files: files)
+            }
         } catch {
             _ = send(UInt8(ascii: "E"), Data("\(error)".utf8))
             return 1
@@ -76,7 +80,10 @@ enum ScenePreview {
                 _ = send(UInt8(ascii: "E"), Data("a frame couldn't be drawn".utf8))
                 return 1
             }
-            guard send(UInt8(ascii: "F"), jpeg) else { return 0 }
+            let shown = renderer.loop.map { $0.start + time.truncatingRemainder(dividingBy: $0.period) } ?? time
+            var payload = Data()
+            withUnsafeBytes(of: shown.bitPattern.bigEndian) { payload.append(contentsOf: $0) }
+            guard send(UInt8(ascii: "F"), payload + jpeg) else { return 0 }
             // Real time; a slow scene drops frames instead of slowing down.
             let due = start.addingTimeInterval(Double(frame) / fps)
             let wait = due.timeIntervalSinceNow
@@ -91,14 +98,15 @@ final class ScenePreviewProcess: @unchecked Sendable {
     private var process: Process?
     private var input: Pipe?
 
-    /// `frame` and `failed` are called on the main actor.
-    func start(folder: URL, properties: [String: SceneJSON], frame: @escaping @MainActor (NSImage) -> Void,
-               failed: @escaping @MainActor (String) -> Void) {
+    /// `frame` (the picture and its time in the scene) and `failed` are called on the main actor.
+    func start(folder: URL, properties: [String: SceneJSON], part: (start: Double, length: Double)? = nil,
+               frame: @escaping @MainActor (NSImage, Double) -> Void, failed: @escaping @MainActor (String) -> Void) {
         stop()
         guard let executable = Bundle.main.executableURL else { return }
         let p = Process()
         p.executableURL = executable
         p.arguments = ["--preview-scene", folder.path] + SceneChildOptions.arguments(properties: properties)
+            + SceneChildOptions.arguments(part: part)
         let input = Pipe(), output = Pipe()
         p.standardInput = input
         p.standardOutput = output
@@ -111,8 +119,9 @@ final class ScenePreviewProcess: @unchecked Sendable {
             for (type, payload) in reader.append(data) {
                 if type == UInt8(ascii: "F") {
                     // Only the newest frame matters; decoding happens here, off the main thread.
-                    guard let image = NSImage(data: payload) else { continue }
-                    Task { @MainActor in frame(image) }
+                    guard payload.count > 8, let image = NSImage(data: payload.dropFirst(8)) else { continue }
+                    let time = Double(bitPattern: payload.prefix(8).reduce(0) { $0 << 8 | UInt64($1) })
+                    Task { @MainActor in frame(image, time) }
                 } else if type == UInt8(ascii: "E") {
                     let text = String(decoding: payload.prefix(500), as: UTF8.self)
                     Task { @MainActor in failed(text) }

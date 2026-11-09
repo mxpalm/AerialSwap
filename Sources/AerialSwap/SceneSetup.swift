@@ -15,6 +15,14 @@ final class SceneSetup {
     var fps = 60
     /// How the scene fills the screen (the main display's shape); the preview shows it without restarting.
     var framing = SceneFraming(screenAspect: SceneSetup.screenAspect)
+    /// The longest animation's cycle (SceneDocument.animationLength) when it's longer than a loop chosen by itself:
+    /// then the user can choose the part of it to loop.
+    let animationLength: Double?
+    /// A loop chosen by itself (10–30 s), or the part of the animation in `part`.
+    var choosesPart = false { didSet { if choosesPart != oldValue { scheduleRestart() } } }
+    var part: ClosedRange<Double> = 0 ... 1 { didSet { if part != oldValue, choosesPart { scheduleRestart() } } }
+    /// Where in the scene the preview's newest frame is (seconds).
+    private(set) var playhead: Double?
     /// The newest preview frame, and why the preview stopped when it did.
     var frame: NSImage?   // set by the preview (and Snapshot)
     /// A preview frame for the window's blurred background, renewed every few seconds (blurring the whole window costs
@@ -45,9 +53,13 @@ final class SceneSetup {
     }
 
     /// `hidden`: settings left out because a video can't honor them (SceneProject.liveSettings: clocks, now playing).
-    init(scene: WorkshopScene, project: SceneProject, verdict: SceneVerdict, hidden: Set<String> = []) {
+    init(scene: WorkshopScene, project: SceneProject, verdict: SceneVerdict, hidden: Set<String> = [],
+         animationLength: Double? = nil) {
         self.scene = scene
         self.verdict = verdict
+        let length = animationLength.map { min($0, SceneChildOptions.maxPart) }
+        self.animationLength = length.flatMap { $0 > 30 ? $0 : nil }
+        if let length = self.animationLength { part = 0 ... length }
         properties = project.properties.filter { Self.isEditable($0) && !hidden.contains($0.id) }
         defaults = project.values
         values = project.values
@@ -70,6 +82,12 @@ final class SceneSetup {
 
     var isChanged: Bool { !changes.isEmpty }
 
+    /// The part to loop (start, length), when the user chose one.
+    var chosenPart: (start: Double, length: Double)? {
+        guard choosesPart, animationLength != nil else { return nil }
+        return (part.lowerBound, max(1, part.upperBound - part.lowerBound))
+    }
+
     func set(_ id: String, _ value: SceneJSON) {
         guard values[id] != value else { return }
         values[id] = value
@@ -87,10 +105,12 @@ final class SceneSetup {
     func startPreview() {
         isPreviewing = true
         previewProblem = nil
-        preview.start(folder: scene.folder, properties: changes,
-                      frame: { [weak self] image in
+        playhead = nil
+        preview.start(folder: scene.folder, properties: changes, part: chosenPart,
+                      frame: { [weak self] image, time in
                           guard let self, self.isPreviewing else { return }
                           self.frame = image
+                          self.playhead = time
                           if -self.backdropTime.timeIntervalSinceNow > 2 {
                               self.backdrop = image
                               self.backdropTime = .now

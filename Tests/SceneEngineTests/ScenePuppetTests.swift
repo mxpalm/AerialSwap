@@ -9,6 +9,15 @@ struct ScenePuppetTests {
         #expect(throws: SceneError.self) { try ScenePuppet(data: Data(repeating: 0xFF, count: 64), name: "x.mdl") }
     }
 
+    /// Alpine Village's longest animation, the balloon's, takes 20400 frames at 60 fps to come round.
+    @Test(.enabled(if: LocalScenesTests.scenes.contains { $0.lastPathComponent == "3269762902" }))
+    func animationLength() throws {
+        let folder = try #require(LocalScenesTests.scenes.first { $0.lastPathComponent == "3269762902" })
+        let project = try SceneProject(folder: folder)
+        let document = try SceneDocument(files: try SceneFiles(folder: folder, entry: project.file), project: project)
+        #expect(document.animationLength == 340)
+    }
+
     /// Puppets from a downloaded wallpaper (SCENE_PUPPET_DIR): they parse, and frame 0 leaves the mesh at rest.
     @Test func localPuppets() throws {
         guard let dir = ProcessInfo.processInfo.environment["SCENE_PUPPET_DIR"] else { return }

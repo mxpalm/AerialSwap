@@ -183,6 +183,21 @@ public struct SceneDocument: Sendable {
     /// Values a SceneScript computes (`{"script": …, "value": …}`), in scene order.
     public let scripts: [Script]
 
+    /// How long the longest puppet animation the scene shows takes to come round (seconds, at its layer's rate), or nil
+    /// without any: those can run for minutes, far longer than a loop chosen by itself (SceneLoop.plan).
+    public var animationLength: Double? {
+        var longest: Double?
+        for object in objects where object.visible {
+            guard case .image(let layer) = object.kind, let puppet = layer.puppet else { continue }
+            for playing in layer.puppetAnimations where playing.visible && playing.blend > 0 && playing.rate != 0 {
+                guard let animation = puppet.animations.first(where: { $0.id == playing.animation }), animation.duration > 0 else { continue }
+                let length = animation.duration / abs(playing.rate) * (animation.mode == .mirror ? 2 : 1)
+                longest = max(longest ?? 0, length)
+            }
+        }
+        return longest
+    }
+
     /// Loads `project.file` (normally scene.json) and everything it references. `overrides` replace the project's
     /// property values (the user's choices in AerialSwap).
     public init(files: SceneFiles, project: SceneProject, overrides: [String: SceneJSON] = [:]) throws {

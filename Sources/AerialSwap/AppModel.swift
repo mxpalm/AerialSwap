@@ -1270,21 +1270,23 @@ final class AppModel {
         guard !isBusy else { return }
         showWorkshopImport = false
         Task {
-            let loaded = await Task.detached { () -> Result<(SceneProject, SceneVerdict, Set<String>), Error> in
+            let loaded = await Task.detached { () -> Result<(SceneProject, SceneVerdict, Set<String>, Double?), Error> in
                 Result {
                     let project = try SceneProject(folder: scene.folder)
-                    let hidden = (try? SceneFiles(folder: scene.folder, entry: project.file)).map(project.liveSettings) ?? []
-                    return (project, SceneVerdict(folder: scene.folder), hidden)
+                    let files = try? SceneFiles(folder: scene.folder, entry: project.file)
+                    let hidden = files.map(project.liveSettings) ?? []
+                    let length = files.flatMap { try? SceneDocument(files: $0, project: project) }?.animationLength
+                    return (project, SceneVerdict(folder: scene.folder), hidden, length)
                 }
             }.value
             switch loaded {
-            case .success(let (project, verdict, hidden)):
+            case .success(let (project, verdict, hidden, length)):
                 self.sceneVerdicts[scene.id] = verdict
                 guard verdict.canUse else { self.notice = Notice(kind: .error, text: "“\(scene.title)”: \(verdict.detail)"); return }
                 self.clearSource()
                 self.sourceCredit = (credit ?? "a Steam Workshop creator", scene.page?.absoluteString)
                 self.displayName = scene.title
-                self.sceneSetup = SceneSetup(scene: scene, project: project, verdict: verdict, hidden: hidden)
+                self.sceneSetup = SceneSetup(scene: scene, project: project, verdict: verdict, hidden: hidden, animationLength: length)
                 self.steamCopyToRemove = steamCopy   // after clearSource, which forgets the last one
                 if let thumbnail = self.workshopThumbnails[scene.id] { self.backdrops["source"] = thumbnail }
             case .failure(let error):
@@ -1298,7 +1300,7 @@ final class AppModel {
         guard let setup = sceneSetup else { return }
         setup.stopPreview()
         bakeScene(setup.scene.folder, name: displayName ?? setup.scene.title, credit: sourceCredit, fps: setup.fps,
-                  properties: setup.changes, framing: setup.framing, thenShow: thenShow)
+                  properties: setup.changes, framing: setup.framing, part: setup.chosenPart, thenShow: thenShow)
     }
 
     /// Add Folder…: a Steam folder somewhere else (another bottle, an external disk) or a folder of wallpapers.
@@ -1758,8 +1760,9 @@ final class AppModel {
     /// (measured on an M3 Pro: 25 -> 60 fps adds ~1.1x the clip length, 25 -> 120 fps less, as it overlaps the encoder).
     var estimateText: String {
         if let setup = sceneSetup {
-            // A loop is 10–30 s, and 4K at 60 fps renders and encodes at about real time (measured: 20 s in 25 s).
-            let seconds = 30.0 * Double(setup.fps) / 60
+            // A loop is 10–30 s unless a part is chosen, and 4K at 60 fps renders and encodes at about real time
+            // (measured: 20 s in 25 s).
+            let seconds = (setup.chosenPart?.length ?? 30) * 1.25 * Double(setup.fps) / 60
             return seconds < 90 ? "about \(Int(seconds)) seconds" : "about \(Int((seconds / 60).rounded())) minutes"
         }
         let length = max(1, trimEnd - trimStart)
@@ -1856,7 +1859,8 @@ final class AppModel {
     /// Renders a Wallpaper Engine scene into a video in a helper process (see SceneBaker), then saves it to the library
     /// like a transcoded video and (optionally) shows it.
     func bakeScene(_ folder: URL, name: String, credit: (credit: String, page: String?)?, fps: Int,
-                   properties: [String: SceneJSON] = [:], framing: SceneFraming = .fill, thenShow: Bool) {
+                   properties: [String: SceneJSON] = [:], framing: SceneFraming = .fill,
+                   part: (start: Double, length: Double)? = nil, thenShow: Bool) {
         guard !isBusy else { return }
         let destination = Self.workDir().appending(path: "\(UUID().uuidString).mov")
         let bake = SceneBakeProcess()
@@ -1872,7 +1876,7 @@ final class AppModel {
         Task.detached {
             do {
                 _ = try await bake.run(folder: folder, destination: destination, fps: fps, properties: properties,
-                                       framing: framing) { p in
+                                       framing: framing, part: part) { p in
                     Task { @MainActor in self.progress = p }
                 }
                 await MainActor.run {

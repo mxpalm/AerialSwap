@@ -24,12 +24,17 @@ enum Snapshot {
     }
 
     /// Configure for a scene Steam downloaded on this Mac, framed for a MacBook Pro screen.
-    private static func sceneSetup(_ m: AppModel, id: String, time: Double = 2, _ change: (SceneSetup) -> Void = { _ in }) {
+    private static func sceneSetup(_ m: AppModel, id: String, time: Double = 2, withSettings: Bool = true,
+                                   _ change: (SceneSetup) -> Void = { _ in }) {
         guard let scene = WallpaperEngine.downloadedScene(id: id), let project = try? SceneProject(folder: scene.folder) else { return }
         m.clearSource()
         m.displayName = scene.title
-        let hidden = (try? SceneFiles(folder: scene.folder, entry: project.file)).map(project.liveSettings) ?? []
-        let setup = SceneSetup(scene: scene, project: project, verdict: SceneVerdict(folder: scene.folder), hidden: hidden)
+        let hidden = withSettings ? (try? SceneFiles(folder: scene.folder, entry: project.file)).map(project.liveSettings) ?? []
+                                  : Set(project.properties.map(\.id))
+        let length = (try? SceneFiles(folder: scene.folder, entry: project.file))
+            .flatMap { try? SceneDocument(files: $0, project: project) }?.animationLength
+        let setup = SceneSetup(scene: scene, project: project, verdict: SceneVerdict(folder: scene.folder), hidden: hidden,
+                               animationLength: length)
         setup.framing.screenAspect = 3024.0 / 1964
         setup.frame = sceneFrame(scene.folder, time: time)
         change(setup)
@@ -136,6 +141,13 @@ enum Snapshot {
             // A 21:9 scene filling the screen, its left side shown; a 16:9 one whole, with bars.
             ("06c-configure-scene-fill", { m in sceneSetup(m, id: "3269762902", time: 60) { $0.framing.position = 0.2 } }),
             ("06d-configure-scene-whole", { m in sceneSetup(m, id: "3526096300") { $0.framing.mode = .whole } }),
+            // A long puppet animation with a part of it chosen to loop (settings left out so the panel fits).
+            ("06e-configure-scene-part", { m in
+                sceneSetup(m, id: "3269762902", time: 60, withSettings: false) { setup in
+                    setup.choosesPart = true
+                    setup.part = 40 ... 130
+                }
+            }),
             ("07-low-resolution", { m in
                 m.sceneSetup = nil
                 await load(m, footage.appending(path: "src_low30.mov"))

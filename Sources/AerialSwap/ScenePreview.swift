@@ -7,8 +7,10 @@ import SceneEngine
 /// process (scenes bring their own shaders and scripts, see SceneBakeProcess) and sends JPEG frames through a pipe.
 /// Frames show the whole canvas in its own shape; Configure frames them as the screen will.
 enum ScenePreview {
-    /// The frames' longer side, in pixels.
-    static let size = 960.0
+    /// Frames cover 1920×1080, sharp on a Retina preview even where a wide scene is cut, with their longer side at most
+    /// 2560 pixels. The size costs little: the layers' own buffers, drawn at the scene's size, are most of the work.
+    static let cover = SIMD2(1920.0, 1080.0)
+    static let maxSide = 2560.0
     static let fps = 30.0
 
     /// What goes through the pipe: a type byte ('F' frame, 'E' error), the payload's length (4 bytes, big endian),
@@ -44,9 +46,12 @@ enum ScenePreview {
             let project = try SceneProject(folder: folder)
             let files = try SceneFiles(folder: folder, entry: project.file)
             let document = try SceneDocument(files: files, project: project, overrides: options.properties)
-            let aspect = document.general.width / max(document.general.height, 1)
-            (width, height) = aspect >= 1 ? (Int(size), max(1, Int((size / aspect).rounded())))
-                                          : (max(1, Int((size * aspect).rounded())), Int(size))
+            let raw = document.general.width / max(document.general.height, 1)
+            let aspect = raw.isFinite ? min(max(raw, 0.1), 10) : 16.0 / 9
+            var w = max(cover.x, cover.y * aspect), h = w / aspect
+            let shrink = min(1, maxSide / max(w, h))
+            w *= shrink; h *= shrink
+            (width, height) = (max(1, Int(w.rounded())), max(1, Int(h.rounded())))
             renderer = try SceneRenderer(document: document, files: files, width: width, height: height)
         } catch {
             _ = send(UInt8(ascii: "E"), Data("\(error)".utf8))

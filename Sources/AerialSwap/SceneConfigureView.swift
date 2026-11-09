@@ -31,7 +31,7 @@ struct SceneConfigureView: View {
 
     /// The window behind it all: the preview blurred, or the scene's picture until the first frame.
     @ViewBuilder private var background: some View {
-        if let frame = setup.frame {
+        if let frame = setup.backdrop ?? setup.frame {
             GeometryReader { geo in
                 Image(nsImage: frame).resizable().aspectRatio(contentMode: .fill)
                     .frame(width: geo.size.width, height: geo.size.height).clipped()

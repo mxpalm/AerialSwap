@@ -17,6 +17,10 @@ final class SceneSetup {
     var framing = SceneFraming(screenAspect: SceneSetup.screenAspect)
     /// The newest preview frame, and why the preview stopped when it did.
     var frame: NSImage?   // set by the preview (and Snapshot)
+    /// A preview frame for the window's blurred background, renewed every few seconds (blurring the whole window costs
+    /// more than showing a frame); nil uses `frame`.
+    private(set) var backdrop: NSImage?
+    @ObservationIgnored private var backdropTime = Date.distantPast
     private(set) var previewProblem: String?
 
     @ObservationIgnored private let preview = ScenePreviewProcess()
@@ -86,6 +90,10 @@ final class SceneSetup {
                       frame: { [weak self] image in
                           guard let self, self.isPreviewing else { return }
                           self.frame = image
+                          if -self.backdropTime.timeIntervalSinceNow > 2 {
+                              self.backdrop = image
+                              self.backdropTime = .now
+                          }
                       },
                       failed: { [weak self] text in
                           guard let self, self.isPreviewing else { return }

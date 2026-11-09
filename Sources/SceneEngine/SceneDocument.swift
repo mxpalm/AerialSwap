@@ -67,6 +67,10 @@ public struct SceneDocument: Sendable {
         public let material: Material
         /// A text layer's text: the renderer draws it as the layer's texture (`textTexture`).
         public var text: SceneText? = nil
+        /// A puppet-warp layer's mesh and the animations it plays (`animationlayers`); nil when the model has none or
+        /// its file can't be read.
+        public var puppet: ScenePuppet? = nil
+        public var puppetAnimations: [ScenePuppet.Layer] = []
 
         /// The texture name a text layer's material reads.
         static func textTexture(_ id: Int) -> String { "__text/\(id)" }
@@ -324,12 +328,26 @@ public struct SceneDocument: Sendable {
             let effects = (o["effects"]?.array ?? []).prefix(SceneLimits.maxEffects).enumerated().compactMap { effect($1, index: $0) }
             let size = o["size"]?.vector.flatMap { $0.count >= 2 ? SIMD2($0[0], $0[1]) : nil }
             let color = o["color"]?.vector.flatMap { $0.count >= 3 ? SIMD3($0[0], $0[1], $0[2]) : nil } ?? .one
-            return ImageLayer(
+            var layer = ImageLayer(
                 modelPath: modelPath, model: model, size: size, alignment: o["alignment"]?.string ?? "center",
                 alpha: o["alpha"]?.number ?? 1, color: color, brightness: o["brightness"]?.number ?? 1,
                 colorBlendMode: Int(o["colorBlendMode"]?.number ?? 0), copyBackground: o["copybackground"]?.bool ?? false,
                 pointFilter: o["nointerpolation"]?.bool ?? false, clampUVs: o["clampuvs"]?.bool ?? false,
                 effects: Array(effects), material: material)
+            if let path = model.puppet {
+                if let data = files.data(path), data.count <= SceneLimits.maxPuppetBytes {
+                    layer.puppet = try? ScenePuppet(data: data, name: path)
+                } else {
+                    missing.insert(SceneFiles.normalized(path))
+                }
+                layer.puppetAnimations = (o["animationlayers"]?.array ?? []).prefix(16).compactMap { a in
+                    guard let id = a["animation"]?.number else { return nil }
+                    let rate = a["rate"]?.number ?? 1, blend = a["blend"]?.number ?? 1
+                    return ScenePuppet.Layer(animation: Int(id), rate: rate.isFinite ? rate : 1, blend: blend.isFinite ? blend : 1,
+                                             additive: a["additive"]?.bool ?? false, visible: a["visible"]?.bool ?? true)
+                }
+            }
+            return layer
         }
 
         /// A text object as an image layer showing its text: static text, and scripted text that isn't live (its saved

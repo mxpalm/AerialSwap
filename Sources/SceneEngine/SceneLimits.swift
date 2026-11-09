@@ -26,6 +26,8 @@ public enum SceneLimits {
     /// Scripts in one scene, and the size of one.
     public static let maxScripts = 1024
     public static let maxScriptBytes = 256 << 10
+    /// Largest puppet-warp model (`.mdl`): its vertices are moved on the CPU every frame.
+    public static let maxPuppetBytes = 16 << 20
     /// JSON nesting depth.
     public static let maxJSONDepth = 64
 }

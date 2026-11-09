@@ -16,7 +16,7 @@ public struct SceneAnalysis: Sendable, Equatable {
         for object in document.objects where object.visible {
             switch object.kind {
             case .image(let layer):
-                if layer.model.puppet != nil { blockers.insert("puppet-warp animation") }
+                if layer.model.puppet != nil && layer.puppet == nil { blockers.insert("puppet-warp animation it can't read") }
                 for pass in Self.passes(of: layer) {
                     if !pass.userTextures.isEmpty { leftOut["pictures from your Mac (album art, slideshows)", default: 0] += 1 }
                     for stage in ["vert", "frag"] {

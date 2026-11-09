@@ -397,23 +397,26 @@ public final class SceneRenderer {
             if !layer.compose && effects.isEmpty && image.colorBlendMode == 0 && isCoreShader {
                 guard let base = baseTexture(pass, layer: layer, time: time) else { return }
                 let pipeline = try pipelines.pipeline(pipelines.program("aerialswap/image"), combos: [:], blending: SceneBlending(pass.blending))
-                draw(pipeline, encoder: frame.scene(), vertices: quad(layer.corners, base.uvs), slots: [0: base.binding],
+                let vertices = mesh(layer, uvs: base.uvs, time: time) ?? quad(layer.corners, base.uvs)
+                draw(pipeline, encoder: frame.scene(), vertices: vertices, slots: [0: base.binding],
                      system: system(mvp: onScreen, model: world, color: color, time: time))
                 return
             }
             guard let result = try renderLayer(layer, pass: pass, world: world, effects: effects, time: time, frame: frame) else { return }
             defer { if layer.isReferenced { composites[layer.id] = result } else { give(result) } }
+            // Effects work on the flat image; a puppet bends the result as it goes onto the scene.
             let uvs = rectangle(SIMD4(0, 0, 1, 1))
+            let vertices = mesh(layer, uvs: uvs, time: time) ?? quad(layer.corners, uvs)
             let system = system(mvp: onScreen, model: world, color: color, time: time)
             if image.colorBlendMode != 0 {
                 let pipeline = try pipelines.pipeline(pipelines.program("aerialswap/blendimage"),
                                                       combos: ["BLENDMODE": image.colorBlendMode], blending: .none)
-                draw(pipeline, encoder: frame.scene(), vertices: quad(layer.corners, uvs),
+                draw(pipeline, encoder: frame.scene(), vertices: vertices,
                      slots: [0: buffer(result), 1: buffer(background)], system: system)
             } else {
                 let pipeline = try pipelines.pipeline(pipelines.program("aerialswap/image"), combos: [:],
                                                       blending: layer.compose ? .translucent : SceneBlending(pass.blending))
-                draw(pipeline, encoder: frame.scene(), vertices: quad(layer.corners, uvs), slots: [0: buffer(result)], system: system)
+                draw(pipeline, encoder: frame.scene(), vertices: vertices, slots: [0: buffer(result)], system: system)
             }
         } catch {
             issues.insert("Layer “\(layer.name)”: \(Self.firstLine(error))")
@@ -767,6 +770,22 @@ public final class SceneRenderer {
 
     private func quad(_ corners: [SIMD2<Float>], _ uvs: [SIMD2<Float>]) -> [SceneVertex] {
         zip(corners, uvs).map { SceneVertex(position: SIMD3($0.x, $0.y, 0), texCoord: $1) }
+    }
+
+    /// A puppet-warp layer's mesh as its bones have it at `time`, as triangles in layer units. `uvs` is where the image is
+    /// in its texture (top left, top right, bottom left, bottom right). nil for layers without a puppet.
+    private func mesh(_ layer: Layer, uvs: [SIMD2<Float>], time: Double) -> [SceneVertex]? {
+        guard let puppet = layer.image.puppet, !puppet.indices.isEmpty, uvs.count == 4 else { return nil }
+        let positions = puppet.positions(layers: layer.image.puppetAnimations, time: time)
+        // Mesh positions are centred on the image, y up; its texture coordinates run from the top left.
+        let topLeft = layer.corners[0], bottomRight = layer.corners[3]
+        let centre = (topLeft + bottomRight) / 2
+        let origin = uvs[0], across = uvs[1] - uvs[0], down = uvs[2] - uvs[0]
+        return puppet.indices.map { i in
+            let p = centre + positions[i]
+            let uv = puppet.vertices[i].uv
+            return SceneVertex(position: SIMD3(p.x, p.y, 0), texCoord: origin + uv.x * across + uv.y * down)
+        }
     }
 
     private func clipQuad(_ uvs: [SIMD2<Float>]) -> [SceneVertex] {

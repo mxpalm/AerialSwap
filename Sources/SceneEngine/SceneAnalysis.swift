@@ -31,7 +31,6 @@ public struct SceneAnalysis: Sendable, Equatable {
             case .particle, .group, .unknown: break
             }
         }
-        if document.general.bloom { leftOut["bloom (glow)", default: 0] += 1 }
         if document.general.cameraParallax { leftOut["mouse parallax", default: 0] += 1 }
         let missingShaders = document.missingFiles.filter { $0.hasPrefix("effects/") || $0.hasPrefix("shaders/") }
         if !missingShaders.isEmpty { leftOut["effects AerialSwap doesn't have", default: 0] += missingShaders.count }

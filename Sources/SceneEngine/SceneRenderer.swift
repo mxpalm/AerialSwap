@@ -299,8 +299,48 @@ public final class SceneRenderer {
         }
         _ = frame.scene()
         frame.endScene()
+        if document.general.bloom { bloom(time: time, frame: frame) }
         composites.values.forEach(give)
         composites = [:]
+    }
+
+    /// The scene's glow (`general.bloom`): what's brighter than the threshold, blurred at a quarter of the size and
+    /// added back `bloomstrength` times.
+    private func bloom(time: Double, frame: Frame) {
+        guard let blit = frame.commands.makeBlitCommandEncoder() else { return }
+        blit.copy(from: frame.target, to: background)
+        blit.endEncoding()
+        let size = SIMD2(max(1, width / 4), max(1, height / 4))
+        let identity = system(mvp: matrix_identity_float4x4, model: matrix_identity_float4x4, color: .one, time: time)
+        let whole = clipQuad(rectangle(SIMD4(0, 0, 1, 1)))
+        var current = take(size)
+        do {
+            let threshold = min(max(document.general.bloomThreshold, 0), 1)
+            let extract = try pipelines.pipeline(pipelines.program("aerialswap/bloomextract"), combos: [:], blending: .none)
+            var encoder = frame.offscreen(current)
+            draw(extract, encoder: encoder, vertices: whole, slots: [0: buffer(background)],
+                 constants: ["threshold": .number(threshold)], system: identity)
+            encoder.endEncoding()
+            let gaussian = try pipelines.program("effects/blur_gaussian")
+            for vertical in [0, 1] {
+                let output = take(size)
+                encoder = frame.offscreen(output)
+                draw(try pipelines.pipeline(gaussian, combos: ["VERTICAL": vertical], blending: .none), encoder: encoder,
+                     vertices: whole, slots: [0: buffer(current)], constants: ["scale": .string("1 1")], system: identity)
+                encoder.endEncoding()
+                give(current)
+                current = output
+            }
+            let strength = Float(min(max(document.general.bloomStrength, 0), 10))
+            let add = try pipelines.pipeline(pipelines.program("aerialswap/image"), combos: [:], blending: .additive)
+            draw(add, encoder: frame.scene(), vertices: whole, slots: [0: buffer(current)],
+                 system: system(mvp: matrix_identity_float4x4, model: matrix_identity_float4x4,
+                                color: SIMD4(strength, strength, strength, 1), time: time))
+            frame.endScene()
+        } catch {
+            issues.insert("Bloom: \(Self.firstLine(error))")
+        }
+        give(current)
     }
 
     /// The frame at `time` as an opaque image.

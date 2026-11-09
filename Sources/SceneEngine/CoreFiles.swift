@@ -35,6 +35,8 @@ public enum CoreFiles {
             files["shaders/\(name).vert"] = particleVert
             files["shaders/\(name).frag"] = particleFrag
         }
+        files["shaders/aerialswap/bloomextract.vert"] = passVertex
+        files["shaders/aerialswap/bloomextract.frag"] = bloomExtractFrag
         files["shaders/aerialswap/blendimage.vert"] = blendImageVert
         files["shaders/aerialswap/blendimage.frag"] = blendImageFrag
         for name in ["aerialswap/image", "genericimage", "genericimage2", "genericimage3", "genericimage4"] {
@@ -327,6 +329,20 @@ public enum CoreFiles {
             vec2 t = 1.0 / g_Texture0Resolution.zw;
             gl_FragColor = (texSample2D(g_Texture0, v_TexCoord + t * vec2(-1.0, -1.0)) + texSample2D(g_Texture0, v_TexCoord + t * vec2(1.0, -1.0))
                 + texSample2D(g_Texture0, v_TexCoord + t * vec2(-1.0, 1.0)) + texSample2D(g_Texture0, v_TexCoord + t * vec2(1.0, 1.0))) * 0.25;
+        }
+        """
+
+    /// Scene bloom's first step: the frame at a quarter of its size (four taps), only what's brighter than the threshold.
+    static let bloomExtractFrag = """
+        uniform sampler2D g_Texture0; // {"hidden":true}
+        uniform vec4 g_Texture0Resolution;
+        uniform float g_Threshold; // {"material":"threshold","default":0.65}
+        varying vec2 v_TexCoord;
+        void main() {
+            vec2 t = 1.0 / g_Texture0Resolution.zw;
+            vec3 c = (texSample2D(g_Texture0, v_TexCoord + t * vec2(-1.0, -1.0)).rgb + texSample2D(g_Texture0, v_TexCoord + t * vec2(1.0, -1.0)).rgb
+                + texSample2D(g_Texture0, v_TexCoord + t * vec2(-1.0, 1.0)).rgb + texSample2D(g_Texture0, v_TexCoord + t * vec2(1.0, 1.0)).rgb) * 0.25;
+            gl_FragColor = vec4(max(c - vec3(g_Threshold, g_Threshold, g_Threshold), vec3(0.0, 0.0, 0.0)), 1.0);
         }
         """
 

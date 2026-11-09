@@ -659,6 +659,10 @@ public final class SceneRenderer {
         var vertices: [SceneVertex] = []
         vertices.reserveCapacity(sprites.count * 6 * system.renderers.count)
         for renderer in system.renderers {
+            if case .rope(let subdivision) = renderer {
+                vertices += rope(sprites, subdivision: subdivision, rect: texture.frame(at: 0).rect, world: world)
+                continue
+            }
             for sprite in sprites {
                 let index = switch system.animation {
                 case .randomFrame: sprite.frame
@@ -679,6 +683,8 @@ public final class SceneRenderer {
                     let direction = speed > 1e-4 ? velocity / speed : SIMD2<Float>(0, 1)
                     across = SIMD2(direction.y, -direction.x) * half
                     along = direction * half * min(max(speed * length, minimum), maximum)
+                case .rope:
+                    continue
                 }
                 let center = SIMD2(sprite.position.x, sprite.position.y)
                 func corner(_ x: Float, _ y: Float, _ uv: SIMD2<Float>) -> SceneVertex {
@@ -703,6 +709,47 @@ public final class SceneRenderer {
         } catch {
             issues.insert("Particles “\(name)”: \(Self.firstLine(error))")
         }
+    }
+
+    /// A rope renderer's ribbon as triangles: a Catmull-Rom curve through the particles (oldest first) with
+    /// `subdivision` points between two, as wide as the particles are big; the texture runs along it (u) and across (v).
+    private func rope(_ sprites: [ParticleSystem.Sprite], subdivision: Int, rect: SIMD4<Float>, world: simd_float4x4) -> [SceneVertex] {
+        guard sprites.count >= 2 else { return [] }
+        // The curve's points, with the size and color they carry.
+        var points: [(position: SIMD3<Float>, size: Float, color: SIMD4<Float>)] = []
+        let steps = subdivision + 1
+        for i in 0 ..< sprites.count - 1 {
+            let p0 = sprites[max(i - 1, 0)].position, p1 = sprites[i].position, p2 = sprites[i + 1].position
+            let p3 = sprites[min(i + 2, sprites.count - 1)].position
+            for step in 0 ..< steps {
+                let t = Float(step) / Float(steps), t2 = t * t, t3 = t2 * t
+                let a = 2 * p1, b = p2 - p0, c = 2 * p0 - 5 * p1 + 4 * p2 - p3, d = 3 * p1 - p0 - 3 * p2 + p3
+                let position = 0.5 * (a + b * t + c * t2 + d * t3)
+                points.append((position, sprites[i].size + (sprites[i + 1].size - sprites[i].size) * t,
+                               sprites[i].color + (sprites[i + 1].color - sprites[i].color) * t))
+            }
+        }
+        let last = sprites[sprites.count - 1]
+        points.append((last.position, last.size, last.color))
+
+        func vertex(_ index: Int, side: Float) -> SceneVertex {
+            let point = points[index]
+            let ahead = points[min(index + 1, points.count - 1)].position, behind = points[max(index - 1, 0)].position
+            let tangent = SIMD2(ahead.x - behind.x, ahead.y - behind.y)
+            let length = simd_length(tangent)
+            let normal = length > 1e-4 ? SIMD2(-tangent.y, tangent.x) / length : SIMD2<Float>(0, 1)
+            let local = SIMD2(point.position.x, point.position.y) + normal * point.size / 2 * side
+            let p: SIMD4<Float> = world * SIMD4<Float>(local.x, local.y, point.position.z, 1)
+            let u = rect.x + rect.z * Float(index) / Float(points.count - 1)
+            return SceneVertex(position: SIMD3(p.x, p.y, p.z), texCoord: SIMD2(u, side > 0 ? rect.y : rect.y + rect.w), color: point.color)
+        }
+        var vertices: [SceneVertex] = []
+        vertices.reserveCapacity((points.count - 1) * 6)
+        for i in 0 ..< points.count - 1 {
+            let a = vertex(i, side: 1), b = vertex(i, side: -1), c = vertex(i + 1, side: 1), d = vertex(i + 1, side: -1)
+            vertices += [a, c, b, c, d, b]
+        }
+        return vertices
     }
 
     private func particleMaterial(_ path: String) -> SceneDocument.MaterialPass? {

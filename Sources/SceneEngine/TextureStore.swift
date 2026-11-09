@@ -246,7 +246,8 @@ final class TextureStore {
     }
 
     /// A stand-in for one of Wallpaper Engine's particle textures, by what its name says it is: fog and smoke are soft
-    /// noisy clouds, drops and rain are streaks, leaves are leaves, halos are rings, and anything else is a soft dot.
+    /// noisy clouds, drops and rain are streaks, leaves are leaves, beams are soft bands, halos are rings, and anything
+    /// else is a soft dot.
     private func particle(_ name: String) -> GPUTexture? {
         let n = name.lowercased()
         let size = 128
@@ -289,6 +290,10 @@ final class TextureStore {
                 let b = (v - u) * 0.7071
                 return SIMD3(0.85, 0.45, 0.12) * (abs(b) < 0.03 ? 0.6 : 1)
             })
+        }
+        if n.contains("beam") || n.contains("rope") {
+            // Soft across (v), even along (u): ribbons and beams.
+            return shape { _, v in let a = max(0, 1 - v * v); return a * a }
         }
         if n.contains("halo") || n.contains("ring") {
             return shape { u, v in let r = (u * u + v * v).squareRoot(); return max(0, 1 - abs(r - 0.8) * 8) }

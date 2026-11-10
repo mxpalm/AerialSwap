@@ -105,13 +105,15 @@ public enum ShaderTranslator {
             var body = clean(source)
             var inputs: [String] = []
             let source = body
+            func assigns(_ name: String) -> Bool {
+                source.range(of: #"\b\#(name)\s*(\.\w+)?\s*(\[[^\]]*\])?\s*([-+*/]?=(?!=)|\+\+|--)"#,
+                             options: .regularExpression) != nil
+            }
             body = rewrite(body, keyword: "varying") { type, name, suffix in
                 let location = "layout(location = \(locations[name] ?? 0))"
                 if isVertex { return "\(location) out \(type) \(name)\(suffix);" }
-                // HLSL lets a fragment shader change its inputs, so those it assigns to are copied into globals of the
-                // same name.
-                let assigned = #"\b\#(name)\s*(\.\w+)?\s*(\[[^\]]*\])?\s*([-+*/]?=(?!=)|\+\+|--)"#
-                guard source.range(of: assigned, options: .regularExpression) != nil else {
+                // HLSL lets a shader change its inputs, so those it assigns to are copied into globals of the same name.
+                guard assigns(name) else {
                     // Metal only links matching types, HLSL truncates or pads: the fragment reads the vertex
                     // stage's type through a macro.
                     if suffix.isEmpty, let vertexType = vertexTypes[name], vertexType != type,
@@ -123,12 +125,12 @@ public enum ShaderTranslator {
                 inputs.append(name)
                 return "\(location) in \(type) as_in_\(name)\(suffix); \(type) \(name)\(suffix);"
             }
-            if !inputs.isEmpty, let main = body.range(of: #"\bvoid\s+main\s*\(\s*(void)?\s*\)\s*\{"#, options: .regularExpression) {
-                body.insert(contentsOf: inputs.map { " \($0) = as_in_\($0);" }.joined(), at: main.upperBound)
-            }
             if isVertex {
                 body = rewrite(body, keyword: "attribute") { type, name, _ in
-                    "layout(location = \(attributes[name] ?? 0)) in \(type) \(name);"
+                    let location = "layout(location = \(attributes[name] ?? 0))"
+                    guard assigns(name) else { return "\(location) in \(type) \(name);" }
+                    inputs.append(name)
+                    return "\(location) in \(type) as_in_\(name); \(type) \(name);"
                 }
                 for v in extra {
                     body = "layout(location = \(locations[v.name] ?? 0)) out \(v.type) \(v.name)\(v.count > 0 ? "[\(v.count)]" : "");\n" + body
@@ -136,6 +138,9 @@ public enum ShaderTranslator {
             } else {
                 body = replaceWord("gl_FragColor", with: "as_FragColor", in: body)
                 body = "layout(location = 0) out vec4 as_FragColor;\n" + body
+            }
+            if !inputs.isEmpty, let main = body.range(of: #"\bvoid\s+main\s*\(\s*(void)?\s*\)\s*\{"#, options: .regularExpression) {
+                body.insert(contentsOf: inputs.map { " \($0) = as_in_\($0);" }.joined(), at: main.upperBound)
             }
             var stageDefines = defines
             // Undefined names in #if count as 0, as in C.

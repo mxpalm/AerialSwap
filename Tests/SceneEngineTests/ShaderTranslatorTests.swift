@@ -82,6 +82,22 @@ import Testing
             """)
     }
 
+    @Test func vertexShadersMayChangeTheirAttributes() throws {
+        let shader = ShaderTranslator.translate(vertex: """
+            uniform mat4 g_ModelViewProjectionMatrix;
+            attribute vec3 a_Position;
+            attribute vec2 a_TexCoord;
+            varying vec2 v_TexCoord;
+            void main() {
+                a_TexCoord.y = 1.0 - a_TexCoord.y;
+                gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+                v_TexCoord = a_TexCoord;
+            }
+            """, fragment: "varying vec2 v_TexCoord;\nvoid main() { gl_FragColor = vec4(v_TexCoord, 0.0, 1.0); }", combos: [:])
+        #expect(shader.attributes["a_TexCoord"] == 1)
+        _ = try ShaderTranslator.compile(shader.vertex, stage: .vertex)
+    }
+
     @Test func mismatchedVectorsAreTruncated() throws {
         try Self.compile(fragment: """
             uniform vec2 u_Offset;

@@ -232,7 +232,9 @@ final class TextureStore {
         case "util/transparent": solid([0, 0, 0, 0])
         case "util/noflow": solid([128, 128, 0, 255])
         case "util/noise": pixels(256, 256) { _, _, random in [random(), random(), random(), random()] }
-        case "util/clouds_256": clouds(256)
+        case "util/clouds_256", "util/perlin_256": clouds(256)
+        case "util/uniform_256": pixels(256, 256) { _, _, random in let v = random(); return [v, v, v, 255] }
+        case "pattern/voronoi", "pattern/voronoi_local": voronoi(256, cells: 8)
         case let n where n.hasPrefix("gradient/gradient_fire"):
             // Black through red, orange and yellow to white.
             pixels(256, 1) { x, _, _ in
@@ -277,6 +279,18 @@ final class TextureStore {
                 return falloff * falloff * (0.35 + cloud)
             }
         }
+        if n.contains("drops_sheet") || n.contains("raindrop") {
+            // Round drops on glass, and their normal map (a dome; green points up): what refracting rain draws with.
+            func dome(_ u: Float, _ v: Float) -> (alpha: Float, normal: SIMD3<Float>) {
+                let r = (u * u + v * v).squareRoot() / 0.85
+                guard r < 1 else { return (0, SIMD3(0, 0, 1)) }
+                return (min(1, (1 - r) * 8), SIMD3(u / 0.85, -v / 0.85, (1 - r * r).squareRoot()))
+            }
+            if n.contains("normal") {
+                return shape({ u, v in dome(u, v).alpha }, color: { u, v in dome(u, v).normal * 0.5 + 0.5 })
+            }
+            return shape { u, v in dome(u, v).alpha }
+        }
         if ["drop", "rain", "streak", "line"].contains(where: n.contains) {
             return shape { u, v in max(0, 1 - abs(u) * 6) * max(0, 1 - v * v) }
         }
@@ -320,6 +334,26 @@ final class TextureStore {
         guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
         texture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: bytes, bytesPerRow: width * 4)
         return GPUTexture(images: [texture], width: width, height: height, imageWidth: width, imageHeight: height)
+    }
+
+    /// Tiling cell noise: each pixel's distance to the nearest of one random point per cell (0 at a point, white
+    /// toward the cell edges), grey with full alpha.
+    private func voronoi(_ size: Int, cells: Int) -> GPUTexture? {
+        var random = RandomSource(seed: 31)
+        let points = (0 ..< cells * cells).map { _ in SIMD2(Double(random.next()), Double(random.next())) }
+        let cell = Double(size) / Double(cells)
+        return pixels(size, size) { x, y, _ in
+            let p = SIMD2(Double(x) + 0.5, Double(y) + 0.5) / cell
+            let cx = Int(p.x), cy = Int(p.y)
+            var nearest = Double.infinity
+            for j in -1 ... 1 { for i in -1 ... 1 {
+                let point = points[((cy + j + cells) % cells) * cells + (cx + i + cells) % cells]
+                let d = SIMD2(Double(cx + i), Double(cy + j)) + point - p
+                nearest = min(nearest, (d * d).sum())
+            } }
+            let v = UInt8(max(0, min(255, nearest.squareRoot() / 0.75 * 255)))
+            return [v, v, v, 255]
+        }
     }
 
     /// Soft tiling value noise in a few octaves, grey with full alpha.

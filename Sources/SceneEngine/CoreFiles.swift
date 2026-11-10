@@ -35,6 +35,8 @@ public enum CoreFiles {
             files["shaders/\(name).vert"] = particleVert
             files["shaders/\(name).frag"] = particleFrag
         }
+        files["shaders/aerialswap/particlerefract.vert"] = particleRefractVert
+        files["shaders/aerialswap/particlerefract.frag"] = particleRefractFrag
         files["shaders/aerialswap/bloomextract.vert"] = passVertex
         files["shaders/aerialswap/bloomextract.frag"] = bloomExtractFrag
         files["shaders/aerialswap/blendimage.vert"] = blendImageVert
@@ -103,6 +105,46 @@ public enum CoreFiles {
         void main() {
             vec4 color = texSample2D(g_Texture0, v_TexCoord) * v_Color;
             gl_FragColor = vec4(color.rgb * g_Overbright, color.a);
+        }
+        """
+
+    /// Refracting particles (drops on glass): the scene behind (`g_Texture2`, a copy) seen through each particle's normal
+    /// map (`g_Texture1`), shaped by its own texture's alpha. The bend is `g_RefractAmount` in screen units, so a drop
+    /// shows a wider view than it covers; a negative amount turns that view over, as a real drop does.
+    static let particleRefractVert = """
+        uniform mat4 g_ModelViewProjectionMatrix;
+
+        attribute vec3 a_Position;
+        attribute vec2 a_TexCoord;
+        attribute vec4 a_Color;
+
+        varying vec2 v_TexCoord;
+        varying vec4 v_Color;
+        varying vec2 v_ScreenCoord;
+
+        void main() {
+            gl_Position = mul(vec4(a_Position, 1.0), g_ModelViewProjectionMatrix);
+            v_TexCoord = a_TexCoord;
+            v_Color = a_Color;
+            v_ScreenCoord = vec2(gl_Position.x / gl_Position.w * 0.5 + 0.5, 0.5 - gl_Position.y / gl_Position.w * 0.5);
+        }
+        """
+
+    static let particleRefractFrag = """
+        uniform sampler2D g_Texture0;
+        uniform sampler2D g_Texture1;
+        uniform sampler2D g_Texture2;
+        uniform float g_RefractAmount; // {"material":"ui_editor_properties_refract_amount","default":0.1}
+
+        varying vec2 v_TexCoord;
+        varying vec4 v_Color;
+        varying vec2 v_ScreenCoord;
+
+        void main() {
+            float alpha = texSample2D(g_Texture0, v_TexCoord).a * v_Color.a;
+            vec2 normal = texSample2D(g_Texture1, v_TexCoord).xy * 2.0 - 1.0;
+            vec2 bent = v_ScreenCoord + vec2(normal.x, -normal.y) * g_RefractAmount;
+            gl_FragColor = vec4(texSample2D(g_Texture2, bent).rgb * v_Color.rgb, alpha);
         }
         """
 

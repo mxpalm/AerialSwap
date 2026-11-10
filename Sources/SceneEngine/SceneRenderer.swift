@@ -646,9 +646,11 @@ public final class SceneRenderer {
             issues.insert("Particles “\(name)” have no material or texture")
             return
         }
-        // Refraction bends the scene behind through a normal map; drawn plainly it would show the map itself.
-        if material.combos["REFRACT"] == 1 {
-            issues.insert("Particles “\(name)”: refraction isn't drawn")
+        // Refraction bends the scene behind through a normal map (the material's second texture).
+        let refracts = material.combos["REFRACT"] == 1
+        let normalMap = refracts ? material.textures.dropFirst().first.flatMap { $0 }.flatMap { textures.texture($0) } : nil
+        if refracts && normalMap == nil {
+            issues.insert("Particles “\(name)”: refraction has no normal map")
             return
         }
         guard files.isCore("shaders/\(material.shader).vert") else {
@@ -673,25 +675,33 @@ public final class SceneRenderer {
                 // The quad's half axes: across and along.
                 let half = sprite.size / 2
                 var across: SIMD2<Float>, along: SIMD2<Float>
+                var center = SIMD2(sprite.position.x, sprite.position.y)
+                // The far end's width and alpha, as a share of the particle's.
+                var tail: Float = 1
                 switch renderer {
                 case .sprite:
                     let c = cos(sprite.rotation), s = sin(sprite.rotation)
                     across = SIMD2(c, s) * half
                     along = SIMD2(-s, c) * half
-                case .trail(let length, let minimum, let maximum):
+                case .trail(let length, let minimum, let maximum, let tapered):
                     let velocity = SIMD2(sprite.velocity.x, sprite.velocity.y)
                     let speed = simd_length(velocity)
                     let direction = speed > 1e-4 ? velocity / speed : SIMD2<Float>(0, 1)
                     across = SIMD2(direction.y, -direction.x) * half
                     along = direction * half * min(max(speed * length, minimum), maximum)
+                    if tapered {
+                        center -= along
+                        tail = 0.15
+                    }
                 case .rope:
                     continue
                 }
-                let center = SIMD2(sprite.position.x, sprite.position.y)
                 func corner(_ x: Float, _ y: Float, _ uv: SIMD2<Float>) -> SceneVertex {
-                    let local: SIMD2<Float> = center + across * x + along * y
+                    let local: SIMD2<Float> = center + across * x * (y < 0 ? tail : 1) + along * y
                     let p: SIMD4<Float> = world * SIMD4<Float>(local.x, local.y, sprite.position.z, 1)
-                    return SceneVertex(position: SIMD3(p.x, p.y, p.z), texCoord: uv, color: sprite.color)
+                    var color = sprite.color
+                    if y < 0 { color.w *= tail < 1 ? 0 : 1 }
+                    return SceneVertex(position: SIMD3(p.x, p.y, p.z), texCoord: uv, color: color)
                 }
                 let topLeft = corner(-1, 1, SIMD2(rect.x, rect.y)), topRight = corner(1, 1, SIMD2(rect.x + rect.z, rect.y))
                 let bottomLeft = corner(-1, -1, SIMD2(rect.x, rect.y + rect.w)), bottomRight = corner(1, -1, SIMD2(rect.x + rect.z, rect.y + rect.w))
@@ -700,13 +710,29 @@ public final class SceneRenderer {
         }
 
         do {
+            func binding(_ texture: GPUTexture) -> Binding {
+                Binding(texture: texture.texture(at: time),
+                        sampler: sampler(nearest: texture.flags.contains(.pointFilter), clamp: texture.flags.contains(.clampUVs),
+                                         mips: texture.hasMips),
+                        resolution: texture.resolution, format: texture.format)
+            }
+            let system = self.system(mvp: projection, model: matrix_identity_float4x4, color: .one, time: time)
+            if let normalMap {
+                // What's drawn so far is what the drops bend.
+                frame.endScene()
+                if let blit = frame.commands.makeBlitCommandEncoder() {
+                    blit.copy(from: frame.target, to: background)
+                    blit.endEncoding()
+                }
+                let pipeline = try pipelines.pipeline(pipelines.program("aerialswap/particlerefract"), combos: [:], blending: .translucent)
+                draw(pipeline, encoder: frame.scene(), vertices: vertices,
+                     slots: [0: binding(texture), 1: binding(normalMap), 2: buffer(background)], constants: material.constants,
+                     system: system)
+                return
+            }
             let pipeline = try pipelines.pipeline(pipelines.program("aerialswap/particle"), combos: [:], blending: SceneBlending(material.blending))
-            let binding = Binding(texture: texture.texture(at: time),
-                                  sampler: sampler(nearest: texture.flags.contains(.pointFilter), clamp: texture.flags.contains(.clampUVs),
-                                                   mips: texture.hasMips),
-                                  resolution: texture.resolution, format: texture.format)
-            draw(pipeline, encoder: frame.scene(), vertices: vertices, slots: [0: binding], constants: material.constants,
-                 system: self.system(mvp: projection, model: matrix_identity_float4x4, color: .one, time: time))
+            draw(pipeline, encoder: frame.scene(), vertices: vertices, slots: [0: binding(texture)], constants: material.constants,
+                 system: system)
         } catch {
             issues.insert("Particles “\(name)”: \(Self.firstLine(error))")
         }

@@ -27,8 +27,9 @@ final class ParticleSystem {
 
     enum Renderer {
         case sprite
-        /// Stretched along the velocity: length = size × clamp(speed × `length`, `minimum`, `maximum`).
-        case trail(length: Float, minimum: Float, maximum: Float)
+        /// Stretched along the velocity: length = size × clamp(speed × `length`, `minimum`, `maximum`). Tapered, it
+        /// runs back from the particle only and narrows and fades toward its end (`ropetrail`).
+        case trail(length: Float, minimum: Float, maximum: Float, tapered: Bool = false)
         /// One ribbon through the particles in the order they were born, as wide as each is big, smoothed with
         /// `subdivision` points between two particles.
         case rope(subdivision: Int)
@@ -250,6 +251,9 @@ final class ParticleSystem {
             case "spritetrail":
                 return .trail(length: Float(r["length"]?.number ?? 0.05), minimum: Float(r["minlength"]?.number ?? 0),
                               maximum: Float(r["maxlength"]?.number ?? 10))
+            case "ropetrail":
+                return .trail(length: Float(r["length"]?.number ?? 0.05), minimum: Float(r["minlength"]?.number ?? 0),
+                              maximum: Float(r["maxlength"]?.number ?? 10), tapered: true)
             case "rope":
                 return .rope(subdivision: min(max(Int(r["subdivision"]?.number ?? 0), 0), 16))
             case let name:

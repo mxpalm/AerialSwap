@@ -326,7 +326,15 @@ var __host = (function () {
     };
     const quiet = () => {};
     const console = { log: quiet, info: quiet, warn: quiet, error: quiet, debug: quiet };
+    // Nothing ever plays in a video, so the media events never come; scripts only read their constants.
+    class MediaPlaybackEvent { constructor() { this.state = 0; } }
+    Object.assign(MediaPlaybackEvent, { PLAYBACK_STOPPED: 0, PLAYBACK_PLAYING: 1, PLAYBACK_PAUSED: 2 });
+    class MediaStatusEvent { constructor() { this.enabled = false; } }
+    class MediaPropertiesEvent { constructor() { Object.assign(this, { title: '', artist: '', albumTitle: '', albumArtist: '', subTitle: '', genres: '', contentType: '' }); } }
+    class MediaThumbnailEvent { constructor() { this.hasThumbnail = false; } }
+    class MediaTimelineEvent { constructor() { this.position = 0; this.duration = 0; } }
     Object.assign(globalThis, {
+        MediaPlaybackEvent, MediaStatusEvent, MediaPropertiesEvent, MediaThumbnailEvent, MediaTimelineEvent,
         Vec2, Vec3, Vec4, WEMath, WEColor, WEVector, engine, input, thisScene, shared: {}, localStorage, console,
         setTimeout: engine.setTimeout, setInterval: engine.setInterval,
         clearTimeout: engine.clearTimeout, clearInterval: engine.clearInterval,

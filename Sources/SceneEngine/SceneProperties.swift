@@ -204,12 +204,14 @@ enum SceneCondition {
 extension SceneProject {
     /// IDs of the settings a video can't honor, so they aren't offered: ones labelled as being about a clock or the
     /// date, ones that only change live objects (whose scripts read the clock, the music playing, the sound or the
-    /// cursor: clocks, now playing, visualizers; and groups of them), and ones only shown under such a setting. Labels
+    /// cursor: clocks, now playing, visualizers; album covers; and groups of them), and ones only shown under such a
+    /// setting. Labels
     /// decide over IDs: wallpapers reuse IDs (one's "clock" switches butterflies).
     public func liveSettings(files: SceneFiles) -> Set<String> {
         guard let raw = try? files.json(file), let objects = raw["objects"]?.array else { return [] }
         let live = Set(((try? SceneDocument.scripts(in: objects, properties: values)) ?? [])
             .filter { SceneText.isLive($0.source) }.map(\.object))
+            .union(objects.filter(SceneDocument.showsAlbumArt).compactMap { $0["id"]?.number.map { Int($0) } })
 
         // Live objects, and groups whose objects all are.
         var children: [Int: [Int]] = [:]

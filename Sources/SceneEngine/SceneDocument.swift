@@ -43,6 +43,8 @@ public struct SceneDocument: Sendable {
         /// A transform-only object other objects hang from.
         case group
         case text
+        /// An image of the music playing's cover (now playing), which a video can't show: not drawn.
+        case nowPlaying
         case sound
         case model3D
         case light
@@ -274,6 +276,13 @@ public struct SceneDocument: Sendable {
         return scripts
     }
 
+    /// Whether an object's own image is the cover of the music playing (`$mediaThumbnail`, a system user texture).
+    static func showsAlbumArt(_ object: SceneJSON) -> Bool {
+        let textures = object["instance"]?["usertextures"]
+        let entries = textures?.array ?? textures?.object.map { Array($0.values) } ?? []
+        return entries.contains { $0["name"]?.string?.hasPrefix("$media") == true }
+    }
+
     static func bounded(_ value: Double?, default fallback: Double, range: ClosedRange<Double> = 1 ... 65_536) -> Double {
         guard let value, value.isFinite else { return fallback }
         return min(max(value, range.lowerBound), range.upperBound)
@@ -299,7 +308,9 @@ public struct SceneDocument: Sendable {
             guard o.object != nil else { return nil }
             let id = Int(o["id"]?.number ?? -1)
             let kind: Kind
-            if let image = o["image"]?.string {
+            if o["image"] != nil && SceneDocument.showsAlbumArt(o) {
+                kind = .nowPlaying
+            } else if let image = o["image"]?.string {
                 kind = imageLayer(o, modelPath: image).map(Kind.image) ?? .unknown
             } else if let particle = o["particle"]?.string {
                 kind = json(particle).map {

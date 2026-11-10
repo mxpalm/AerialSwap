@@ -30,4 +30,26 @@ import Testing
         let hidden = project.liveSettings(files: try SceneFiles(folder: folder))
         #expect(hidden == ["showtime", "fmt", "seconds"])
     }
+
+    /// An album cover (its image is the music playing's thumbnail) isn't drawn, and its switch isn't offered.
+    @Test func albumCoverIsLeftOut() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "scene-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Data("""
+            {"general": {"orthogonalprojection": {"width": 1920, "height": 1080}},
+             "objects": [
+               {"id": 1, "name": "Album Cover", "image": "models/cover.json", "visible": {"user": "media", "value": true},
+                "instance": {"textures": ["cover"], "usertextures": [{"name": "$mediaThumbnail", "type": "system"}]}},
+               {"id": 2, "name": "Sky", "image": "models/sky.json"}]}
+            """.utf8).write(to: folder.appending(path: "scene.json"))
+        let project = try SceneProject(json: try SceneJSON(data: Data("""
+            {"file": "scene.json", "general": {"properties": {
+              "media": {"text": "Album cover", "type": "bool", "value": true}}}}
+            """.utf8), name: "project.json"))
+        let files = try SceneFiles(folder: folder)
+        #expect(project.liveSettings(files: files) == ["media"])
+        let document = try SceneDocument(files: files, project: project)
+        #expect(document.objects.map { if case .nowPlaying = $0.kind { true } else { false } } == [true, false])
+    }
 }

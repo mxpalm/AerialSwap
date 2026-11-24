@@ -37,7 +37,8 @@ struct WorkshopItem: Identifiable, Hashable, Sendable {
 
     /// The creator's genre tags, without the type, rating and resolution ones.
     var genres: [String] {
-        let technical: Set<String> = ["Video", "Scene", "Wallpaper", "Everyone", "Approved", "Other resolution"]
+        let technical: Set<String> = ["Video", "Scene", "Wallpaper", "Everyone", "Questionable", "Mature", "Approved",
+                                      "Other resolution"]
         return tags.filter { !technical.contains($0) && !$0.contains(" x ") }
     }
 }
@@ -86,7 +87,7 @@ struct WorkshopTopic: Hashable, Identifiable, Sendable {
 }
 
 /// Searches Wallpaper Engine's Workshop (Steam's IPublishedFileService/QueryFiles) for video wallpapers rated for
-/// everyone: through AerialSwap's Discover proxy (Proxy/), which adds the Steam Web API key, or directly with a key of
+/// everyone (every rating with Settings → Workshop → Show mature wallpapers): through AerialSwap's Discover proxy (Proxy/), which adds the Steam Web API key, or directly with a key of
 /// one's own (`defaults write io.github.mxpalm.AerialSwap SteamKey <key>` or STEAM_KEY).
 struct WorkshopClient: Sendable {
     static let pageSize = 30
@@ -130,8 +131,8 @@ struct WorkshopClient: Sendable {
         if let key {
             // The same request the proxy makes.
             components = URLComponents(string: "https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/")!
-            let tags = [options.workshopKind.tag, "Everyone"] + (topicTag.map { [$0] } ?? []) + (options.resolution == .uhd ? [Self.tag4K] : [])
-            let excluded = options.resolution == .qhd ? Self.below1440Tags : []
+            let tags = [options.workshopKind.tag] + (options.showsMature ? [] : ["Everyone"]) + (topicTag.map { [$0] } ?? []) + (options.resolution == .uhd ? [Self.tag4K] : [])
+            let excluded = (options.resolution == .qhd ? Self.below1440Tags : []) + options.hiddenGenres.sorted()
             components.queryItems = items + tags.enumerated().map { URLQueryItem(name: "requiredtags[\($0.offset)]", value: $0.element) }
                 + excluded.enumerated().map { URLQueryItem(name: "excludedtags[\($0.offset)]", value: $0.element) } + [
                 URLQueryItem(name: "appid", value: SteamDownload.appID), URLQueryItem(name: "match_all_tags", value: "1"),
@@ -142,7 +143,9 @@ struct WorkshopClient: Sendable {
             components = viaProxy
             components.queryItems = items + (topicTag.map { [URLQueryItem(name: "tag", value: $0)] } ?? [])
                 + (options.workshopKind == .scene ? [URLQueryItem(name: "type", value: "scene")] : [])
+                + (options.showsMature ? [URLQueryItem(name: "rating", value: "all")] : [])
                 + (options.resolution.proxyValue.map { [URLQueryItem(name: "resolution", value: $0)] } ?? [])
+                + (options.hiddenGenres.isEmpty ? [] : [URLQueryItem(name: "exclude", value: options.hiddenGenres.sorted().joined(separator: ","))])
         } else {
             throw WorkshopSearchError.noKey
         }
@@ -157,6 +160,8 @@ struct WorkshopClient: Sendable {
         var result = Self.parse(data)
         // A proxy from before scenes ignores `type` and answers with videos: those aren't what was asked for.
         result.items.removeAll { !$0.tags.contains(options.workshopKind.tag) }
+        // Same for a proxy from before `exclude`: hidden genres are left out here too (the page comes out shorter).
+        result.items.removeAll { !options.hiddenGenres.isDisjoint(with: $0.tags) }
         // The proxy adds the creators' names; with a key of one's own they're asked for here.
         if let key, result.items.contains(where: { $0.creatorName == nil && $0.creatorID != nil }) {
             let names = await Self.creatorNames(Set(result.items.compactMap(\.creatorID)), key: key)
@@ -166,6 +171,11 @@ struct WorkshopClient: Sendable {
         }
         return result
     }
+
+    /// The Workshop's genre tags, for Hide Genres. A wallpaper whose creator didn't tag its genre can't be hidden.
+    static let genres = ["Abstract", "Animal", "Anime", "Cartoon", "CGI", "Cyberpunk", "Fantasy", "Game", "Girls", "Guys",
+                         "Landscape", "Medieval", "Memes", "MMD", "Music", "Nature", "Pixel art", "Relaxing", "Retro",
+                         "Sci-Fi", "Sports", "Technology", "Television", "Vehicle"]
 
     static let tag4K = "3840 x 2160"
     /// 1440p and up: every item has one resolution tag (Wallpaper Engine sets it), so the ones below are left out, and

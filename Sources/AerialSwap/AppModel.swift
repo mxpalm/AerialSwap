@@ -502,6 +502,15 @@ final class AppModel {
         discoverOptions.save()
     }
 
+    /// Workshop results already shown were searched with the other rating: they're dropped, and the Workshop searches
+    /// again (now if it's open).
+    func setShowsMature(_ shows: Bool) {
+        discoverOptions.showsMature = shows
+        discoverOptions.save()
+        workshopItems = []
+        if discoverSource == .workshop && !isBusy { loadWorkshop() }
+    }
+
     func setDiscoverResolution(_ resolution: DiscoverResolution) {
         var options = discoverOptions
         options.resolution = resolution
@@ -511,6 +520,20 @@ final class AppModel {
     func setWorkshopKind(_ kind: WorkshopKind) {
         var options = discoverOptions
         options.workshopKind = kind
+        applyDiscoverOptions(options)
+    }
+
+    /// Hides or shows a Workshop genre. A hidden genre's topic isn't offered, so a search of it goes back to Trending.
+    func setGenre(_ genre: String, hidden: Bool) {
+        var options = discoverOptions
+        if hidden { options.hiddenGenres.insert(genre) } else { options.hiddenGenres.remove(genre) }
+        if hidden, workshopTopic.tag == genre { workshopTopic = WorkshopTopic.all[0] }
+        applyDiscoverOptions(options)
+    }
+
+    func showAllGenres() {
+        var options = discoverOptions
+        options.hiddenGenres = []
         applyDiscoverOptions(options)
     }
 

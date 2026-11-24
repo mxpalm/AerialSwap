@@ -70,7 +70,8 @@ struct WorkshopPanel: View {
 
     /// Topic chips and the options menu; none is highlighted while a search is shown.
     private var topics: some View {
-        TopicRow(model: model, topics: WorkshopTopic.all.map { TopicChoice(id: $0.id, title: $0.title) },
+        TopicRow(model: model, topics: WorkshopTopic.all.filter { !model.discoverOptions.hiddenGenres.contains($0.tag ?? "") }
+                                    .map { TopicChoice(id: $0.id, title: $0.title) },
                  selectedID: model.workshopQuery.isEmpty ? model.workshopTopic.id : nil,
                  enabled: model.workshop.isAvailable || model.isSnapshot) { id in
             if let topic = WorkshopTopic.all.first(where: { $0.id == id }) { model.selectWorkshopTopic(topic) }

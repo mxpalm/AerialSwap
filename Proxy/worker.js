@@ -24,8 +24,8 @@ const RESOLUTION_EXCLUDED = {
            "Ultrawide Standard Definition", "Dual Standard Definition", "Portrait 1080 x 1920",
            "Portrait 720 x 1280", "Portrait Standard Definition", "Other resolution"],
 };
-// Wallpaper Engine's Workshop, video or scene wallpapers (type=scene) for everyone only: fixed here, whatever else the
-// app asks for.
+// Wallpaper Engine's Workshop, video or scene wallpapers (type=scene), rated for everyone unless the app asks for every
+// rating (rating=all: the user turned on mature wallpapers, after confirming they're 18 or older).
 const WORKSHOP_APP = "431960";
 const WORKSHOP_TYPES = { video: "Video", scene: "Scene" };
 const WORKSHOP_RATING = "Everyone";
@@ -81,7 +81,8 @@ export default {
   },
 };
 
-// GET /workshop?search_text=&query_type=&page=&numperpage=&days=&tag=&resolution=4k|1440&type=video|scene   (all optional)
+// GET /workshop?search_text=&query_type=&page=&numperpage=&days=&tag=&resolution=4k|1440&type=video|scene
+//               &exclude=Anime,Game&rating=all   (all optional; exclude: genre tags left out, at most 12)
 async function workshop(url, request, env, ctx) {
   if (!env.STEAM_KEY) return error(500, "The proxy has no Steam key.");
   const query = new URLSearchParams();
@@ -92,14 +93,19 @@ async function workshop(url, request, env, ctx) {
   query.set("page", String(clamp(url.searchParams.get("page"), 1, 1, 100)));
   query.set("numperpage", String(clamp(url.searchParams.get("numperpage"), 30, 3, 50)));
   if (url.searchParams.has("days")) query.set("days", String(clamp(url.searchParams.get("days"), 7, 1, 365)));
-  const tags = [WORKSHOP_TYPES[url.searchParams.get("type")] ?? WORKSHOP_TYPES.video, WORKSHOP_RATING];
+  const tags = [WORKSHOP_TYPES[url.searchParams.get("type")] ?? WORKSHOP_TYPES.video];
+  if (url.searchParams.get("rating") !== "all") tags.push(WORKSHOP_RATING);
   const tag = url.searchParams.get("tag");
   // Workshop tags are words like "Nature" or "Sci-Fi".
   if (tag && /^[A-Za-z0-9 &'-]{1,30}$/.test(tag)) tags.push(tag);
   const resolution = url.searchParams.get("resolution") ?? "";
   if (RESOLUTION_TAGS[resolution]) tags.push(RESOLUTION_TAGS[resolution]);
   tags.forEach((t, i) => query.set(`requiredtags[${i}]`, t));
-  (RESOLUTION_EXCLUDED[resolution] ?? []).forEach((t, i) => query.set(`excludedtags[${i}]`, t));
+  const excluded = [...(RESOLUTION_EXCLUDED[resolution] ?? [])];
+  for (const t of (url.searchParams.get("exclude") ?? "").split(",").slice(0, 12)) {
+    if (/^[A-Za-z0-9 &'-]{1,30}$/.test(t) && !excluded.includes(t)) excluded.push(t);
+  }
+  excluded.forEach((t, i) => query.set(`excludedtags[${i}]`, t));
   query.sort();
   const cacheKey = await kvKey(`workshop-creators?${query}`);   // answers with previews and creator names; older entries had neither
 

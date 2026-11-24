@@ -90,9 +90,13 @@ struct DiscoverOptions: Codable, Equatable, Sendable {
     var category = PixabayCategory.any                 // Pixabay only
     var period: DiscoverPeriod?                         // Workshop only, with Popular
     var hideInLibrary = false                          // tiles of videos already in the library are left out
+    /// Workshop genre tags whose wallpapers aren't listed ("Anime"…), see WorkshopClient.genres.
+    var hiddenGenres: Set<String> = []                 // Workshop only
     /// Workshop: once the video is in the library, delete the copy Steam downloaded for it (see SteamDownload.removeCopy).
     /// Set in Settings → Workshop.
     var removeSteamCopy = true
+    /// Workshop: also list wallpapers rated Questionable or Mature, not only Everyone. Set in Settings → Workshop.
+    var showsMature = false
 
     private static let key = "DiscoverOptions"
 
@@ -111,7 +115,9 @@ struct DiscoverOptions: Codable, Equatable, Sendable {
         workshopKind = try container.decodeIfPresent(WorkshopKind.self, forKey: .workshopKind) ?? .video
         period = try container.decodeIfPresent(DiscoverPeriod.self, forKey: .period)
         hideInLibrary = try container.decodeIfPresent(Bool.self, forKey: .hideInLibrary) ?? false
+        hiddenGenres = try container.decodeIfPresent(Set<String>.self, forKey: .hiddenGenres) ?? []
         removeSteamCopy = try container.decodeIfPresent(Bool.self, forKey: .removeSteamCopy) ?? true
+        showsMature = try container.decodeIfPresent(Bool.self, forKey: .showsMature) ?? false
     }
 
     static func load() -> DiscoverOptions {
@@ -127,12 +133,14 @@ struct DiscoverOptions: Codable, Equatable, Sendable {
         source == .workshop && sort == .popular ? period : nil
     }
 
-    /// The menu's label for a source: "Nature · Popular · 4K", "Scenes · Popular This Week · 1440p+".
+    /// The menu's label for a source: "Nature · Popular · 4K", "Scenes · Popular This Week · 1440p+ · No Anime".
     func label(for source: DiscoverSource) -> String {
         let category = source == .pixabay && category != .any ? category.title
             : source == .workshop && workshopKind == .scene ? workshopKind.title : nil
         let sort = sort.effective(for: source).title + (period(for: source).map { " " + $0.title } ?? "")
-        return [category, sort, resolution.shortTitle].compactMap { $0 }.joined(separator: " · ")
+        let hidden = source != .workshop || hiddenGenres.isEmpty ? nil
+            : hiddenGenres.count == 1 ? "No \(hiddenGenres.first!)" : "\(hiddenGenres.count) Genres Hidden"
+        return [category, sort, resolution.shortTitle, hidden].compactMap { $0 }.joined(separator: " · ")
     }
 }
 
@@ -263,6 +271,18 @@ struct DiscoverOptionsMenu: View {
                         ForEach(PixabayCategory.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.menu)
+                }
+                if model.discoverSource == .workshop {
+                    Menu("Hide Genres") {
+                        ForEach(WorkshopClient.genres, id: \.self) { genre in
+                            Toggle(genre, isOn: Binding(get: { model.discoverOptions.hiddenGenres.contains(genre) },
+                                                        set: { model.setGenre(genre, hidden: $0) }))
+                        }
+                        if !model.discoverOptions.hiddenGenres.isEmpty {
+                            Divider()
+                            Button("Show All Genres") { model.showAllGenres() }
+                        }
+                    }
                 }
                 Toggle("Hide Videos in Library", isOn: Binding(get: { model.discoverOptions.hideInLibrary }, set: { model.setHideInLibrary($0) }))
             } label: {

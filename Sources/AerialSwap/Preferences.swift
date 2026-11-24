@@ -199,6 +199,7 @@ private struct WorkshopSettings: View {
     @AppStorage(Preferences.startSteamForWorkshopKey) private var startsSteam = false
     @AppStorage(Preferences.quitSteamKey) private var quitsSteam = true
     @AppStorage(Preferences.previewUpscalingKey) private var upscaling = PreviewUpscaling.always
+    @State private var confirmsMature = false
 
     var body: some View {
         Form {
@@ -209,6 +210,14 @@ private struct WorkshopSettings: View {
                        isOn: Binding(get: { model.discoverOptions.removeSteamCopy }, set: { model.setRemoveSteamCopy($0) }))
                 Text("Otherwise AerialSwap starts Steam, hidden, only when you download. Steam keeps running in the background "
                      + "and uses power, so quitting it saves battery. Removing the copy keeps items you're subscribed to.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Content") {
+                Toggle("Show mature wallpapers (18+)", isOn: Binding(get: { model.discoverOptions.showsMature }, set: { shows in
+                    if shows { confirmsMature = true } else { model.setShowsMature(false) }
+                }))
+                Text("Also lists wallpapers their creators rated Questionable or Mature, which can show nudity or violence. "
+                     + "Creators set the ratings themselves, so a wallpaper rated for everyone may still not be.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Previews") {
@@ -222,5 +231,12 @@ private struct WorkshopSettings: View {
         .formStyle(.grouped)
         .scrollDisabled(true)
         .fixedSize(horizontal: false, vertical: true)
+        .alert("Show mature wallpapers?", isPresented: $confirmsMature) {
+            Button("I'm 18 or Older") { model.setShowsMature(true) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The Workshop will also list wallpapers rated Questionable or Mature, with their previews. "
+                 + "They can show nudity or violence.")
+        }
     }
 }

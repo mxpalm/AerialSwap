@@ -984,6 +984,8 @@ final class AppModel {
     /// The user's Steam downloads the item; then it opens like a video from the Wallpaper Engine dialog.
     private func startSteamDownload(_ item: WorkshopItem) {
         guard !isBusy else { return }
+        // Wallpapers rated Questionable or Mature only with Settings → Workshop → Show mature wallpapers.
+        let allowsMature = discoverOptions.showsMature
         Task {
             // Already downloaded: used as it is, Steam isn't asked. Looked up off the main thread: Steam libraries can be
             // on drives that take seconds to wake up.
@@ -992,11 +994,11 @@ final class AppModel {
             }.value
             guard !isBusy, backgroundDownload == nil else { return }
             if let scene {
-                guard scene.rating == nil else { fail(SteamDownloadError.notForEveryone); return }
+                guard scene.rating == nil || allowsMature else { fail(SteamDownloadError.notForEveryone); return }
                 Log.info("Steam: Workshop scene \(item.id) is already downloaded")
                 useWorkshopScene(scene, credit: item.credit, steamCopy: SteamDownload.itemFolder(item.id, containing: scene.folder.appending(path: "project.json")))
             } else if let video = existing {
-                guard video.rating == nil else { fail(SteamDownloadError.notForEveryone); return }
+                guard video.rating == nil || allowsMature else { fail(SteamDownloadError.notForEveryone); return }
                 Log.info("Steam: Workshop item \(item.id) is already downloaded")
                 useWorkshopVideo(video, credit: item.credit)
                 // E.g. one AerialSwap downloaded earlier: removeCopy still keeps subscribed ones and other Steam installs'.
@@ -1019,6 +1021,7 @@ final class AppModel {
         notice = nil
 
         let proxy = workshop.proxy
+        let allowsMature = discoverOptions.showsMature
         Task.detached {
             do {
                 guard await SteamDownload.downloadsAllowed(proxy: proxy) else { throw SteamDownloadError.paused }
@@ -1039,7 +1042,7 @@ final class AppModel {
                 }
                 let video = WallpaperEngine.video(in: folder), scene = video == nil ? WallpaperEngine.scene(in: folder) : nil
                 guard video != nil || scene != nil else { throw SteamDownloadError.notAVideo }
-                guard (video?.rating ?? scene?.rating) == nil else { throw SteamDownloadError.notForEveryone }
+                guard (video?.rating ?? scene?.rating) == nil || allowsMature else { throw SteamDownloadError.notForEveryone }
                 await MainActor.run {
                     self.steamDownloader = nil
                     self.refreshSteamDownloads()

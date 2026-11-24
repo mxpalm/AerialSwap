@@ -34,7 +34,7 @@ Aerials stay untouched.
 
 You need a Mac with Apple Silicon (M1 or later) and macOS 27.
 
-1. **Download** `AerialSwap-2.0.zip` from the [latest release](https://github.com/mxpalm/AerialSwap/releases/latest)
+1. **Download** `AerialSwap-2.1.zip` from the [latest release](https://github.com/mxpalm/AerialSwap/releases/latest)
    and double-click it to unzip.
 2. **Move** `AerialSwap` into your **Applications** folder.
 3. **Open it.** The first time, macOS shows a warning, because AerialSwap is a free app from an independent
@@ -58,7 +58,7 @@ board or a channel, switch the dialog to **Playlist or Board**: you see its vide
 Own [Wallpaper Engine](https://www.wallpaperengine.io) on Steam? Under **Discover → Workshop** you can browse its
 video wallpapers and click **Download with Steam**: your own Steam for Mac downloads it, no Windows needed.
 **Add Video → From Wallpaper Engine…** shows the video wallpapers your Steam already downloaded (also from CrossOver
-or Whisky). AerialSwap never sees your Steam login, and it can't use scene or web wallpapers. Once a wallpaper is in
+or Whisky). AerialSwap never sees your Steam login, and it can't use web wallpapers. Once a wallpaper is in
 your library, AerialSwap removes the copy Steam downloaded for it (turn this off in **Settings → Workshop**); wallpapers
 you subscribed to in the Workshop yourself are never touched. If AerialSwap had to start Steam, it quits Steam again
 when you quit AerialSwap, so Steam doesn't keep using power in the background.
@@ -69,6 +69,14 @@ AerialSwap checks that your account owns Wallpaper Engine, reuses wallpapers Ste
 most 10 downloads an hour and 30 a day. If Valve or Wallpaper Engine's developer object, downloads can be paused
 for everyone without an update. You use it at your own risk. The details and the risks are in
 [TECHNICAL.md](docs/TECHNICAL.md#steam-workshop-downloads).
+
+**Scenes (experimental).** Wallpaper Engine's scene wallpapers (animated pictures with effects and particles) can
+become a video too: switch **Discover → Workshop** to **Scenes**, or pick one under **Add Video → From Wallpaper
+Engine…**. AerialSwap draws the scene itself and shows it live. You can change the scene's own settings, frame it for
+your screen (fill it, or show all of it), and for long animations choose the part to loop. Then AerialSwap records it
+as a seamless loop. It's experimental: AerialSwap draws scenes with its own renderer, so some look different than in
+Wallpaper Engine. What a video can't show is left out: clocks, now playing, audio visualizers, sound, mouse and click
+effects. 3D scenes can't be used. The list tells you what each scene leaves out.
 
 Any length works. Videos in 4K, filmed in landscape (wider than tall) with slow camera movement, look best.
 
@@ -113,8 +121,10 @@ Click on the video itself to hide the library and see the wallpaper the way your
 Click **Discover** at the top to browse thousands of free, high-quality videos from [Pixabay](https://pixabay.com).
 Pick a topic or search for anything, click a video to preview it, then **Use This Video**. AerialSwap downloads it
 in 4K in the background (keep browsing meanwhile; the top bar shows the progress) and takes you to step 2.
-The menu at the end of the topics sorts (Popular, Newest) and filters (resolution, Pixabay's categories, hide videos
-already in your library); videos you already have say **In Library**.
+Under the search field you choose the order (Popular, Newest; in the Workshop also Most Subscribed and a time range)
+and **Filters**: resolution, Pixabay's categories or Workshop genres to hide (Anime, for example), and hiding videos
+already in your library. The filters you use are shown under the topics; click one to remove it. Right-click a
+Workshop wallpaper to hide its genre. Videos you already have say **In Library**.
 
 ### Settings
 
@@ -124,8 +134,9 @@ Press **⌘,** (or click the ⚙ button, then **Settings…**) to choose:
   take (**Delete…** frees it after asking; your library isn't touched).
 - **New Wallpapers**: what a new video starts with: Motion, Seamless loop and Enhance detail.
 - **Workshop**: start Steam as soon as you open the Workshop (so downloads start sooner), quit Steam with AerialSwap
-  if AerialSwap started it, remove Steam's copy after saving, and when small previews are upscaled with Apple's ML
-  upscaler (always, only when plugged in, or never).
+  if AerialSwap started it, remove Steam's copy after saving, when small previews are upscaled with Apple's ML
+  upscaler (always, only when plugged in, or never), and whether the Workshop also lists wallpapers rated for adults
+  (**Show mature wallpapers**, off by default).
 
 ## Questions
 

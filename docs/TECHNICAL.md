@@ -118,8 +118,10 @@ the path decoded first. Thumbnails load only over https.
 - folders added with **Add Folder…** (a Steam folder, its `steamapps`, or any folder of wallpaper folders; kept in
   the `WorkshopFolders` default).
 
-Only `type: video` items are used (MP4, MOV, M4V, WebM, MKV; WebM and MKV go through the usual ffmpeg conversion);
-scene, web and application wallpapers are counted and skipped, and nothing in a download is ever run. Downloads are
+`type: video` items are used as videos (MP4, MOV, M4V, WebM, MKV; WebM and MKV go through the usual ffmpeg
+conversion), `type: scene` items are drawn by AerialSwap's scene renderer (see "Wallpaper Engine scenes"); web and
+application wallpapers are counted and skipped. Nothing in a download is run, except a scene's scripts, inside the
+scene helper process (below). Downloads are
 untrusted (anyone can upload to the Workshop): only `project.json` is parsed (at most 1 MB), the video and preview
 paths must stay inside the item's folder after resolving symlinks, titles are stripped of control characters and
 cut to 120 characters, and previews are decoded as small thumbnails. The file stays where Steam put it and is only
@@ -187,8 +189,10 @@ for directly with a key of one's own): the caption says "Video by <name>", and t
 Steam Workshop".
 Release builds ask the Discover proxy (`/workshop`, see `Proxy/README.md`), which holds the key as the `STEAM_KEY`
 secret; a key of one's own (`defaults write io.github.mxpalm.AerialSwap SteamKey <key>` or `STEAM_KEY`) asks Steam
-directly with the same parameters. The query is always app 431960 with the required tags `Video` and `Everyone`
-(the proxy forces both, whatever the app sends); a topic adds one tag, or searches for subjects that aren't tags
+directly with the same parameters. The query is always app 431960 with the required tag `Video` or `Scene`
+(`type=scene`) and, unless **Show mature wallpapers** is on (Settings → Workshop, off by default, confirmed as 18+;
+`rating=all`), `Everyone`; the proxy allows nothing else. Hidden genres (Filters) become `excludedtags` (proxy:
+`exclude=`, at most 12 tags); the app also drops them from answers, for a proxy without them. A topic adds one tag, or searches for subjects that aren't tags
 (Space, City, Rain, Ocean). Search ranks by relevance (query type 12),
 Trending is this month's most popular (3, 30 days), a topic its tag's best rated (0). Previews load only from
 Steam's image hosts over https; tiles ask Steam's image server for JPG previews scaled to 360 px (`imw`/`imh`, ~16x
@@ -237,7 +241,8 @@ anything from Steam itself.
    It gives up after 3 minutes without progress (waiting in Steam's queue doesn't count as a stall) or an hour in
    all. The app reads the child's output to the end (at most 2 s after it exits) before looking for `FOLDER`. **Cancel** ends the child (Steam may still finish the download).
 9. The folder must be `…/workshop/content/431960/<id>`. It's then read like any downloaded item; one that isn't a
-   video, or isn't rated Everyone in its `project.json`, is refused (Steam keeps its copy).
+   video or scene, or isn't rated Everyone in its `project.json` while Show mature wallpapers is off, is refused
+   (Steam keeps its copy).
 10. Once the video is saved to the library, **Remove Steam's copy after saving** (Settings → Workshop, on by
     default, `DiscoverOptions.removeSteamCopy`) deletes the item's folder (`SteamDownload.removeCopy`), also when Steam
     already had it (step 2), e.g. from an earlier AerialSwap download. Only in Steam for Mac's own library (not a
@@ -277,6 +282,37 @@ AerialSwap.app/Contents/MacOS/AerialSwap --remove-group   # removes the group an
 AerialSwap.app/Contents/MacOS/AerialSwap --install-update <zip URL> <signature URL>   # Updater on this copy, no relaunch
 SteamAppId=431960 AerialSwap.app/Contents/MacOS/AerialSwap --steam-download <id>   # the download child alone: skips the limits and switch, for debugging
 ```
+
+### Wallpaper Engine scenes (experimental)
+
+A scene is drawn by AerialSwap's own renderer (`Sources/SceneEngine`, Metal) and recorded into a looping video;
+Wallpaper Engine itself is never needed or run.
+
+- **Reading:** `scene.pkg` (`PKGV…`: a name, offset and size table) or a loose folder; `scene.json`, materials,
+  models, `.tex` textures (including MP4 video textures, decoded on the fly), puppet-warp models (`.mdl`, skinned on
+  the CPU) and particle systems. Paths must stay inside the item's folder after resolving symlinks
+  (`SceneFiles.contained`); sizes, counts, JSON depth and script length are capped (`SceneLimits`).
+- **Shaders:** Wallpaper Engine's GLSL dialect is rewritten to GLSL 4.50 (`ShaderTranslator`), compiled to SPIR-V by
+  glslang and to Metal Shading Language by SPIRV-Cross (both vendored in `ThirdParty/`, C++ shim in
+  `Sources/CShaderCompiler`). The base shaders and textures that Wallpaper Engine installs itself (generic image and
+  particle shaders, blur, built-in particle and noise textures) are AerialSwap's own versions (`CoreFiles.swift`,
+  `TextureStore`), which is the main reason a scene can look different.
+- **Scripts:** a scene's JavaScript runs in JavaScriptCore against a small stand-in of Wallpaper Engine's script API
+  (`SceneScriptRuntime`): no network, no files; time, `Date` and `Math.random` follow the scene's clock, the cursor
+  rests in the middle and never clicks.
+- **Helper processes:** the live preview (`AerialSwap --preview-scene <folder>`, JPEG frames with their scene time over
+  a pipe, about 30 fps, covering 1920×1080) and the recording (`AerialSwap --bake-scene <folder> <out.mov>`) run in a
+  copy of the app, so a hanging shader or endless script only ends the helper. Both take `--properties <json>` (the
+  scene's settings) and `--loop <start>,<length>`; the recording also takes `--framing <json>` (the preview is framed
+  in the app).
+- **Loops:** the loop length is searched on a 0.1 s grid between 10 and 30 s for where the scene repeats; particles are
+  simulated so they repeat exactly; a crossfade (up to 2 s) is the fallback. Puppet animations longer than 30 s get
+  **Choose part**: the user picks the stretch to loop.
+- **Framing:** for the main display's shape, **Fill** (with a position slider for the side that's cut) or **Whole
+  scene** (blurred, darkened bars).
+- **Left out:** live text (clocks, now playing) and album covers, audio visualizers, sound, mouse parallax and click
+  effects, user pictures. Settings that only change those are hidden in Configure. 3D scenes (perspective camera) and
+  puppets that can't be read are refused. The import list shows each scene's verdict (`SceneAnalysis`).
 
 ## How it works (findings from macOS 27.0.1)
 
@@ -430,7 +466,8 @@ Download with Steam (above) is the one feature that acts on a third-party accoun
   - Ownership check (`BIsSubscribed`) before any request.
   - Items Steam already has are reused, not downloaded again.
   - At most 1 download every 30 s, 10 an hour, 30 a day (per Mac, `SteamDownloadTimes`).
-  - Only `Video` items rated `Everyone`, both in the search (forced by the proxy) and in the downloaded `project.json`.
+  - Only `Video` and `Scene` items, rated `Everyone` unless the user turned on Show mature wallpapers, both in the
+    search (the proxy allows nothing else) and in the downloaded `project.json`.
   - One download at a time, with Cancel; the child quits when it's done.
   - A consent alert says it's unofficial before the first download.
   - Steam's own, Valve-signed library is used; nothing of Valve's is shipped, patched or injected.

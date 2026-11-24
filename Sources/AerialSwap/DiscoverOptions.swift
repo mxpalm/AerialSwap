@@ -338,7 +338,10 @@ struct DiscoverFiltersPopover: View {
         }
         .padding(16)
         .frame(width: 340)
+        // Dark and solid: the popover's own glass is light and lets the tiles behind show through the text.
         .environment(\.colorScheme, .dark)
+        .preferredColorScheme(.dark)
+        .presentationBackground(Theme.ink)
         .onDisappear { model.updateDiscoverOptions(draft) }
     }
 

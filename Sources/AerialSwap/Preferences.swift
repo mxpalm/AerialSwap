@@ -212,19 +212,19 @@ private struct WorkshopSettings: View {
                      + "and uses power, so quitting it saves battery. Removing the copy keeps items you're subscribed to.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Previews") {
+                Picker("Upscale small previews", selection: $upscaling) {
+                    ForEach(PreviewUpscaling.allCases) { Text($0.title).tag($0) }
+                }
+                Text("Small Workshop previews are sharpened 4x with Apple's ML upscaler: 2-4 seconds of work for each one you select.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section("Content") {
                 Toggle("Show mature wallpapers (18+)", isOn: Binding(get: { model.discoverOptions.showsMature }, set: { shows in
                     if shows { confirmsMature = true } else { model.setShowsMature(false) }
                 }))
                 Text("Also lists wallpapers their creators rated Questionable or Mature, which can show nudity or violence. "
                      + "Creators set the ratings themselves, so a wallpaper rated for everyone may still not be.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section("Previews") {
-                Picker("Upscale small previews", selection: $upscaling) {
-                    ForEach(PreviewUpscaling.allCases) { Text($0.title).tag($0) }
-                }
-                Text("Small Workshop previews are sharpened 4x with Apple's ML upscaler: 2-4 seconds of work for each one you select.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

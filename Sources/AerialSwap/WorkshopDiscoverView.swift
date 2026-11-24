@@ -68,9 +68,9 @@ struct WorkshopPanel: View {
         .disabled(!model.workshop.isAvailable)
     }
 
-    /// Topic chips and the options menu; none is highlighted while a search is shown.
+    /// Type, sort, filters and topic chips; no topic is highlighted while a search is shown.
     private var topics: some View {
-        TopicRow(model: model, topics: WorkshopTopic.all.filter { !model.discoverOptions.hiddenGenres.contains($0.tag ?? "") }
+        DiscoverControls(model: model, topics: WorkshopTopic.all.filter { !model.discoverOptions.hiddenGenres.contains($0.tag ?? "") }
                                     .map { TopicChoice(id: $0.id, title: $0.title) },
                  selectedID: model.workshopQuery.isEmpty ? model.workshopTopic.id : nil,
                  enabled: model.workshop.isAvailable || model.isSnapshot) { id in
@@ -241,6 +241,13 @@ private struct WorkshopTile: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
         .contextMenu {
             if let page = item.page { Link("View on the Steam Workshop", destination: page) }
+            let genres = item.genres.filter(WorkshopClient.genres.contains)
+            if !genres.isEmpty {
+                Divider()
+                ForEach(genres, id: \.self) { genre in
+                    Button("Hide \(genre) Wallpapers") { model.setGenre(genre, hidden: true) }
+                }
+            }
         }
         .help("\(item.title)\(item.creatorName.map { "\nVideo by \($0)" } ?? "")\n\(item.genres.joined(separator: ", "))")
     }

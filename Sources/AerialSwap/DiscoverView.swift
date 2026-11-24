@@ -160,9 +160,9 @@ private struct DiscoverPanel: View {
         .disabled(!model.pixabay.isAvailable)
     }
 
-    /// Topic chips and the options menu; none is highlighted while a search is shown.
+    /// Sort, filters and topic chips; no topic is highlighted while a search is shown.
     private var topics: some View {
-        TopicRow(model: model, topics: DiscoverTopic.all.map { TopicChoice(id: $0.id, title: $0.title) },
+        DiscoverControls(model: model, topics: DiscoverTopic.all.map { TopicChoice(id: $0.id, title: $0.title) },
                  selectedID: model.discoverQuery.isEmpty ? model.discoverTopic.id : nil,
                  enabled: model.pixabay.isAvailable || model.isSnapshot) { id in
             if let topic = DiscoverTopic.all.first(where: { $0.id == id }) { model.selectDiscoverTopic(topic) }

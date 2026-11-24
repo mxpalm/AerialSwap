@@ -33,6 +33,9 @@ enum DiscoverResolution: String, Codable, CaseIterable, Sendable {
         }
     }
 
+    /// In the Filters popover.
+    var chipTitle: String { shortTitle ?? "Any" }
+
     var shortTitle: String? {
         switch self {
         case .any: nil
@@ -133,14 +136,35 @@ struct DiscoverOptions: Codable, Equatable, Sendable {
         source == .workshop && sort == .popular ? period : nil
     }
 
-    /// The menu's label for a source: "Nature · Popular · 4K", "Scenes · Popular This Week · 1440p+ · No Anime".
-    func label(for source: DiscoverSource) -> String {
-        let category = source == .pixabay && category != .any ? category.title
-            : source == .workshop && workshopKind == .scene ? workshopKind.title : nil
-        let sort = sort.effective(for: source).title + (period(for: source).map { " " + $0.title } ?? "")
-        let hidden = source != .workshop || hiddenGenres.isEmpty ? nil
-            : hiddenGenres.count == 1 ? "No \(hiddenGenres.first!)" : "\(hiddenGenres.count) Genres Hidden"
-        return [category, sort, resolution.shortTitle, hidden].compactMap { $0 }.joined(separator: " · ")
+    /// The filters in effect for a source, each with the options it takes off ("4K", "No Anime", Pixabay's
+    /// category): the Filters badge and the chips under the topics. More than three hidden genres are one chip.
+    func activeFilters(for source: DiscoverSource) -> [(id: String, title: String, without: DiscoverOptions)] {
+        var filters: [(id: String, title: String, without: DiscoverOptions)] = []
+        func add(_ id: String, _ title: String, _ change: (inout DiscoverOptions) -> Void) {
+            var without = self
+            change(&without)
+            filters.append((id, title, without))
+        }
+        if let title = resolution.shortTitle { add("resolution", title) { $0.resolution = .any } }
+        if source == .pixabay && category != .any { add("category", category.title) { $0.category = .any } }
+        if source == .workshop {
+            if hiddenGenres.count > 3 {
+                add("genres", "\(hiddenGenres.count) Genres Hidden") { $0.hiddenGenres = [] }
+            } else {
+                for genre in hiddenGenres.sorted() { add("genre-\(genre)", "No \(genre)") { $0.hiddenGenres.remove(genre) } }
+            }
+        }
+        if hideInLibrary { add("library", "Not in Library") { $0.hideInLibrary = false } }
+        return filters
+    }
+
+    /// The options with a source's filters back to their defaults; sort, type and Settings' choices stay.
+    func withoutFilters(for source: DiscoverSource) -> DiscoverOptions {
+        var options = self
+        options.resolution = .any
+        options.hideInLibrary = false
+        if source == .pixabay { options.category = .any } else { options.hiddenGenres = [] }
+        return options
     }
 }
 
@@ -150,26 +174,312 @@ struct TopicChoice: Identifiable {
     var title: String
 }
 
-/// Topic chips that fit the panel, then the options menu, which holds the topics that don't fit ("More Topics").
-/// The selected topic always stays a chip: it takes the place of the last one that fits.
-struct TopicRow: View {
+/// Discover's controls under the search field: the Workshop's type, the sort order and the filters on one row, the
+/// topics in a row that scrolls sideways, and the filters in effect as chips that take them off.
+struct DiscoverControls: View {
     @Bindable var model: AppModel
     let topics: [TopicChoice]
     let selectedID: String?       // nil while a search is shown
     var enabled = true
     let select: (String) -> Void
 
-    private static let spacing: CGFloat = 6
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                if model.discoverSource == .workshop {
+                    PillPicker(options: WorkshopKind.allCases.map { .init(value: $0, title: $0.title) },
+                               selection: Binding(get: { model.discoverOptions.workshopKind }, set: { model.setWorkshopKind($0) }),
+                               label: "Show")
+                        .fixedSize()
+                }
+                Spacer(minLength: 0)
+                DiscoverSortMenu(model: model)
+                DiscoverFiltersButton(model: model)
+            }
+            .disabled(model.isBusy || !enabled)
+            TopicStrip(topics: topics, selectedID: selectedID, isSnapshot: model.isSnapshot, select: select)
+                .disabled(model.isBusy || !enabled)
+            ActiveFilterChips(model: model)
+        }
+    }
+}
+
+/// A capsule like the topic chips, for the row's menu and button.
+private struct ControlCapsule: View {
+    let icon: String
+    let title: String
+    var badge = 0
+    var chevron = false
 
     var body: some View {
-        GeometryReader { geo in
-            let (visible, more) = split(width: geo.size.width)
-            HStack(spacing: Self.spacing) {
-                ForEach(visible) { chip($0) }
-                DiscoverOptionsMenu(model: model, moreTopics: more, selectedID: selectedID, select: select)
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+            Text(title)
+            if badge > 0 {
+                Text("\(badge)")
+                    .font(.system(size: 10, weight: .bold)).monospacedDigit()
+                    .foregroundStyle(Theme.ink)
+                    .frame(minWidth: 16, minHeight: 16)
+                    .background(Circle().fill(Color.white))
+            }
+            if chevron { Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).opacity(0.7) }
+        }
+        .fixedSize()
+        .font(.system(size: 12, weight: .semibold))
+        .padding(.horizontal, 11)
+        .frame(height: 28)
+        .background(Capsule().fill(Color.white.opacity(badge > 0 ? 0.2 : 0.1)))
+        .contentShape(Capsule())
+    }
+}
+
+/// "Popular ⌄": the sort order, and for the Workshop's Popular the time it's popular in.
+struct DiscoverSortMenu: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        let source = model.discoverSource
+        let options = model.discoverOptions
+        let title = options.sort.effective(for: source).title + (options.period(for: source).map { " · " + $0.title } ?? "")
+        if model.isSnapshot {
+            ControlCapsule(icon: "arrow.up.arrow.down", title: title, chevron: true)
+        } else {
+            Menu {
+                Picker("Sort By", selection: Binding(get: { options.sort.effective(for: source) }, set: { model.setDiscoverSort($0) })) {
+                    ForEach(DiscoverSort.choices(for: source), id: \.self) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.inline)
+                if source == .workshop && options.sort == .popular {
+                    Picker("Popular In", selection: Binding(get: { options.period }, set: { model.setDiscoverPeriod($0) })) {
+                        Text("Any Time").tag(DiscoverPeriod?.none)
+                        ForEach(DiscoverPeriod.allCases, id: \.self) { Text($0.title).tag(DiscoverPeriod?.some($0)) }
+                    }
+                    .pickerStyle(.inline)
+                }
+            } label: {
+                ControlCapsule(icon: "arrow.up.arrow.down", title: title, chevron: true)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Sort order")
+        }
+    }
+}
+
+/// "Filters ②": opens the filters in a popover that stays open while several are changed; Discover searches again
+/// once, when it closes.
+struct DiscoverFiltersButton: View {
+    @Bindable var model: AppModel
+    @State private var isOpen = false
+
+    var body: some View {
+        let count = model.discoverOptions.activeFilters(for: model.discoverSource).count
+        Button { isOpen = true } label: {
+            ControlCapsule(icon: "line.3.horizontal.decrease", title: "Filters", badge: count)
+        }
+        .buttonStyle(.plain)
+        .help("Resolution, \(model.discoverSource == .workshop ? "genres" : "category") and more")
+        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+            DiscoverFiltersPopover(model: model, draft: model.discoverOptions)
+        }
+    }
+}
+
+/// The filters of the source shown. Changes collect in a draft and apply when the popover closes.
+struct DiscoverFiltersPopover: View {
+    @Bindable var model: AppModel
+    @State var draft: DiscoverOptions
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        let source = model.discoverSource
+        VStack(alignment: .leading, spacing: 16) {
+            section("Resolution") {
+                PillPicker(options: DiscoverResolution.allCases.map { .init(value: $0, title: $0.chipTitle) },
+                           selection: $draft.resolution, label: "Resolution", fill: true)
+            }
+            if source == .pixabay {
+                section("Category") {
+                    FlowLayout(spacing: 6) {
+                        ForEach(PixabayCategory.allCases, id: \.self) { category in
+                            FilterChip(title: category == .any ? "All" : category.title, isOn: draft.category == category) {
+                                draft.category = category
+                            }
+                        }
+                    }
+                }
+            } else {
+                section("Hide Genres", note: "Wallpapers whose creators didn't tag a genre still show.") {
+                    FlowLayout(spacing: 6) {
+                        ForEach(WorkshopClient.genres, id: \.self) { genre in
+                            let hidden = draft.hiddenGenres.contains(genre)
+                            FilterChip(title: genre, isOn: hidden, icon: hidden ? "eye.slash" : nil) {
+                                if hidden { draft.hiddenGenres.remove(genre) } else { draft.hiddenGenres.insert(genre) }
+                            }
+                        }
+                    }
+                }
+            }
+            Toggle("Hide \(source == .workshop ? "wallpapers" : "videos") already in my library", isOn: $draft.hideInLibrary)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .font(.system(size: 12))
+            HStack {
+                Button("Reset") { draft = draft.withoutFilters(for: source) }
+                    .buttonStyle(PillButtonStyle(kind: .secondary, height: 28))
+                    .disabled(draft.withoutFilters(for: source) == draft)
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(PillButtonStyle(kind: .primary, height: 28))
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(16)
+        .frame(width: 340)
+        .environment(\.colorScheme, .dark)
+        .onDisappear { model.updateDiscoverOptions(draft) }
+    }
+
+    private func section<Content: View>(_ title: String, note: String? = nil, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.secondary)
+            content()
+            if let note { Text(note).font(.system(size: 11)).foregroundStyle(Theme.secondary) }
+        }
+    }
+}
+
+/// A chip that switches a filter on and off.
+private struct FilterChip: View {
+    let title: String
+    let isOn: Bool
+    var icon: String? = nil
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if let icon { Image(systemName: icon).font(.system(size: 10, weight: .semibold)) }
+                Text(title)
+            }
+            .font(.system(size: 12, weight: isOn ? .semibold : .regular))
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .foregroundStyle(isOn ? Theme.ink : .white)
+            .background(Capsule().fill(isOn ? Color.white : Color.white.opacity(0.1)))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+    }
+}
+
+/// "No Anime ✕  4K ✕": the filters in effect; a click takes one off.
+struct ActiveFilterChips: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        let source = model.discoverSource
+        let filters = model.discoverOptions.activeFilters(for: source)
+        if !filters.isEmpty {
+            FlowLayout(spacing: 6) {
+                ForEach(filters, id: \.id) { filter in
+                    Button { model.updateDiscoverOptions(filter.without) } label: {
+                        HStack(spacing: 5) {
+                            Text(filter.title)
+                            Image(systemName: "xmark").font(.system(size: 8, weight: .bold)).opacity(0.7)
+                        }
+                        .font(.system(size: 11, weight: .medium))
+                        .padding(.horizontal, 9)
+                        .frame(height: 22)
+                        .background(Capsule().strokeBorder(Color.white.opacity(0.3)))
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Remove this filter")
+                }
+                if filters.count > 1 {
+                    Button("Clear All") { model.updateDiscoverOptions(model.discoverOptions.withoutFilters(for: source)) }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Theme.secondary)
+                        .frame(height: 22)
+                }
+            }
+            .disabled(model.isBusy)
+        }
+    }
+}
+
+/// Topic chips in one row that scrolls sideways, faded and with an arrow at an edge that has more behind it (for a
+/// mouse without sideways scrolling). The selected topic is scrolled into view.
+struct TopicStrip: View {
+    let topics: [TopicChoice]
+    let selectedID: String?
+    let isSnapshot: Bool
+    let select: (String) -> Void
+
+    @State private var position = ScrollPosition(edge: .leading)
+    @State private var offset: CGFloat = 0
+    @State private var width: CGFloat = 0
+    @State private var contentWidth: CGFloat = 0
+
+    private var moreBefore: Bool { offset > 1 }
+    private var moreAfter: Bool { offset + width < contentWidth - 1 }
+
+    var body: some View {
+        Group {
+            if isSnapshot {
+                // An overlay, so the row's full width doesn't widen the panel.
+                Color.clear.overlay(alignment: .leading) { row.fixedSize() }.clipped().mask(fade)
+            } else {
+                ScrollView(.horizontal) { row.scrollTargetLayout() }
+                    .scrollIndicators(.never)
+                    .scrollPosition($position)
+                    .onScrollGeometryChange(for: [CGFloat].self) { g in
+                        [g.contentOffset.x, g.containerSize.width, g.contentSize.width]
+                    } action: { _, values in
+                        (offset, width, contentWidth) = (values[0], values[1], values[2])
+                    }
+                    .mask(fade)
+                    .overlay(alignment: .leading) { if moreBefore { arrow("chevron.left", by: -1) } }
+                    .overlay(alignment: .trailing) { if moreAfter { arrow("chevron.right", by: 1) } }
+                    .onAppear { if let selectedID { position.scrollTo(id: selectedID, anchor: .center) } }
             }
         }
         .frame(height: 26)
+    }
+
+    private var row: some View {
+        HStack(spacing: 6) {
+            ForEach(topics) { chip($0).id($0.id) }
+        }
+    }
+
+    private var fade: some View {
+        HStack(spacing: 0) {
+            LinearGradient(colors: [moreBefore ? .clear : .black, .black], startPoint: .leading, endPoint: .trailing).frame(width: 36)
+            Color.black
+            LinearGradient(colors: [.black, moreAfter ? .clear : .black], startPoint: .leading, endPoint: .trailing).frame(width: 36)
+        }
+    }
+
+    /// Scrolls most of a width further.
+    private func arrow(_ icon: String, by direction: CGFloat) -> some View {
+        Button {
+            let target = min(max(0, offset + direction * width * 0.7), max(0, contentWidth - width))
+            withAnimation(.snappy) { position.scrollTo(x: target) }
+        } label: {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .bold))
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.white.opacity(0.18)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(direction < 0 ? "Earlier topics" : "More topics")
     }
 
     private func chip(_ topic: TopicChoice) -> some View {
@@ -185,130 +495,48 @@ struct TopicRow: View {
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .disabled(!enabled)
         .accessibilityAddTraits(isOn ? .isSelected : [])
-    }
-
-    /// The chips that fit next to the menu, in order, and the rest for the menu.
-    private func split(width: CGFloat) -> ([TopicChoice], [TopicChoice]) {
-        let available = width - DiscoverOptionsMenu.width(label: model.discoverOptions.label(for: model.discoverSource)) - Self.spacing
-        var visible: [TopicChoice] = [], used: CGFloat = 0
-        for topic in topics {
-            let needed = Self.chipWidth(topic.title) + (visible.isEmpty ? 0 : Self.spacing)
-            guard used + needed <= available else { break }
-            visible.append(topic); used += needed
-        }
-        if let selected = topics.first(where: { $0.id == selectedID }), !visible.contains(where: { $0.id == selected.id }) {
-            let needed = Self.chipWidth(selected.title) + Self.spacing
-            while let last = visible.last, used + needed > available {
-                visible.removeLast(); used -= Self.chipWidth(last.title) + Self.spacing
-            }
-            visible.append(selected)
-        }
-        let shown = Set(visible.map(\.id))
-        return (visible, topics.filter { !shown.contains($0.id) })
-    }
-
-    /// Measured semibold (the selected weight), so a chip never grows past its slot when selected.
-    static func chipWidth(_ title: String) -> CGFloat {
-        ceil((title as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]).width) + 22
     }
 }
 
-/// "Popular · 4K ⌄": the topics that don't fit the row, sort order and filters, for both sources.
-struct DiscoverOptionsMenu: View {
-    @Bindable var model: AppModel
-    var moreTopics: [TopicChoice] = []
-    var selectedID: String?
-    var select: (String) -> Void = { _ in }
+/// Lays its views out in rows, left to right, starting a new row when one is full.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
 
-    /// The label's width: icon, text, chevron and padding (TopicRow leaves room for it).
-    static func width(label: String) -> CGFloat {
-        ceil((label as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]).width) + 62
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        // Asked for its ideal size, it's as narrow as its widest view: it never widens what it's in.
+        let width = proposal.width ?? subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+        let rows = rows(width: width, subviews: subviews)
+        let height = rows.map(\.height).reduce(0, +) + spacing * CGFloat(max(0, rows.count - 1))
+        return CGSize(width: width, height: height)
     }
 
-    var body: some View {
-        if model.isSnapshot {
-            labelView
-        } else {
-            Menu {
-                if !moreTopics.isEmpty {
-                    Section("More Topics") {
-                        ForEach(moreTopics) { topic in
-                            Toggle(topic.title, isOn: Binding(get: { topic.id == selectedID }, set: { _ in select(topic.id) }))
-                        }
-                    }
-                    Divider()
-                }
-                if model.discoverSource == .workshop {
-                    Picker("Type", selection: Binding(get: { model.discoverOptions.workshopKind },
-                                                      set: { model.setWorkshopKind($0) })) {
-                        ForEach(WorkshopKind.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.inline)
-                    Divider()
-                }
-                Picker("Sort", selection: Binding(get: { model.discoverOptions.sort.effective(for: model.discoverSource) },
-                                                  set: { model.setDiscoverSort($0) })) {
-                    ForEach(DiscoverSort.choices(for: model.discoverSource), id: \.self) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.inline)
-                if model.discoverSource == .workshop, model.discoverOptions.sort == .popular {
-                    Picker("Popular In", selection: Binding(get: { model.discoverOptions.period }, set: { model.setDiscoverPeriod($0) })) {
-                        Text("Any Time").tag(DiscoverPeriod?.none)
-                        ForEach(DiscoverPeriod.allCases, id: \.self) { Text($0.title).tag(DiscoverPeriod?.some($0)) }
-                    }
-                    .pickerStyle(.menu)
-                }
-                Divider()
-                Picker("Resolution", selection: Binding(get: { model.discoverOptions.resolution }, set: { model.setDiscoverResolution($0) })) {
-                    ForEach(DiscoverResolution.allCases, id: \.self) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.inline)
-                Divider()
-                if model.discoverSource == .pixabay {
-                    Picker("Category", selection: Binding(get: { model.discoverOptions.category }, set: { model.setDiscoverCategory($0) })) {
-                        ForEach(PixabayCategory.allCases, id: \.self) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.menu)
-                }
-                if model.discoverSource == .workshop {
-                    Menu("Hide Genres") {
-                        ForEach(WorkshopClient.genres, id: \.self) { genre in
-                            Toggle(genre, isOn: Binding(get: { model.discoverOptions.hiddenGenres.contains(genre) },
-                                                        set: { model.setGenre(genre, hidden: $0) }))
-                        }
-                        if !model.discoverOptions.hiddenGenres.isEmpty {
-                            Divider()
-                            Button("Show All Genres") { model.showAllGenres() }
-                        }
-                    }
-                }
-                Toggle("Hide Videos in Library", isOn: Binding(get: { model.discoverOptions.hideInLibrary }, set: { model.setHideInLibrary($0) }))
-            } label: {
-                labelView
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in rows(width: bounds.width, subviews: subviews) {
+            var x = bounds.minX
+            for index in row.indices {
+                let size = subviews[index].sizeThatFits(.unspecified)
+                subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2), proposal: ProposedViewSize(size))
+                x += size.width + spacing
             }
-            .menuStyle(.button)
-            .buttonStyle(.plain)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .disabled(model.isBusy)
-            .help(moreTopics.isEmpty ? "Sort and filters" : "More topics, sort and filters")
+            y += row.height + spacing
         }
     }
 
-    private var labelView: some View {
-        HStack(spacing: 4) {
-            Image(systemName: "line.3.horizontal.decrease")
-            Text(model.discoverOptions.label(for: model.discoverSource))
-            Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).opacity(0.7)
+    private func rows(width: CGFloat, subviews: Subviews) -> [(indices: [Int], width: CGFloat, height: CGFloat)] {
+        var rows: [(indices: [Int], width: CGFloat, height: CGFloat)] = []
+        for index in subviews.indices {
+            let size = subviews[index].sizeThatFits(.unspecified)
+            if let last = rows.last, !last.indices.isEmpty, last.width + spacing + size.width <= width {
+                rows[rows.count - 1].indices.append(index)
+                rows[rows.count - 1].width += spacing + size.width
+                rows[rows.count - 1].height = max(last.height, size.height)
+            } else {
+                rows.append(([index], size.width, size.height))
+            }
         }
-        .fixedSize()
-        .font(.system(size: 12, weight: .semibold))
-        .padding(.horizontal, 10)
-        .frame(height: 26)
-        .background(Capsule().fill(Color.white.opacity(0.1)))
-        .contentShape(Capsule())
+        return rows
     }
 }
 

@@ -66,7 +66,13 @@ enum Snapshot {
                 m.discoverSource = .workshop
                 m.selectedWorkshopItemID = m.workshopItems[1].id
             }),
+            ("04c2b-discover-filters", { m in
+                m.discoverOptions.hiddenGenres = ["Anime", "Game"]
+                m.discoverOptions.resolution = .uhd
+            }),
             ("04c3-discover-downloading", { m in
+                m.discoverOptions.hiddenGenres = []
+                m.discoverOptions.resolution = .any
                 m.discoverSource = .pixabay
                 let video = m.discoverVideos[2]
                 m.backgroundDownload = BackgroundDownload(key: "discover-\(video.id)", title: video.title, source: "Pixabay",
@@ -174,6 +180,17 @@ enum Snapshot {
         ]
         for (name, setup) in scenes {
             await setup(model)
+            if name == "04c2b-discover-filters" {
+                // The Filters popover on its own (a popover isn't part of the window's image).
+                var draft = model.discoverOptions
+                draft.hideInLibrary = true
+                let popover = DiscoverFiltersPopover(model: model, draft: draft).background(Theme.ink)
+                let renderer = ImageRenderer(content: popover)
+                renderer.scale = 2
+                if let image = renderer.cgImage, let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) {
+                    try? png.write(to: out.appending(path: "04c2c-filters-popover.png"))
+                }
+            }
             guard let image = render(model),
                   let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) else {
                 print("could not render \(name)"); return 1

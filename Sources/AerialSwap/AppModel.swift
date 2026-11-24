@@ -523,17 +523,20 @@ final class AppModel {
         applyDiscoverOptions(options)
     }
 
-    /// Hides or shows a Workshop genre. A hidden genre's topic isn't offered, so a search of it goes back to Trending.
+    /// Hides or shows a Workshop genre (a tile's context menu).
     func setGenre(_ genre: String, hidden: Bool) {
         var options = discoverOptions
         if hidden { options.hiddenGenres.insert(genre) } else { options.hiddenGenres.remove(genre) }
-        if hidden, workshopTopic.tag == genre { workshopTopic = WorkshopTopic.all[0] }
-        applyDiscoverOptions(options)
+        updateDiscoverOptions(options)
     }
 
-    func showAllGenres() {
-        var options = discoverOptions
-        options.hiddenGenres = []
+    /// Options from Discover's filters. A hidden genre's topic isn't offered, so a search of it goes back to Trending;
+    /// Hide Videos in Library alone needs no new search.
+    func updateDiscoverOptions(_ options: DiscoverOptions) {
+        var searched = options
+        searched.hideInLibrary = discoverOptions.hideInLibrary
+        guard searched != discoverOptions else { return setHideInLibrary(options.hideInLibrary) }
+        if let tag = workshopTopic.tag, options.hiddenGenres.contains(tag) { workshopTopic = WorkshopTopic.all[0] }
         applyDiscoverOptions(options)
     }
 

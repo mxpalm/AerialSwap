@@ -274,16 +274,33 @@ struct TitleCapsule: View {
     let title: String
     var detail: String?
     var detailColor = Theme.secondary
+    var experimental = false
 
     var body: some View {
         HStack(spacing: 10) {
             Text(title).font(.system(size: 13, weight: .semibold)).lineLimit(1).truncationMode(.middle)
             if let detail { Text(detail).font(.system(size: 13)).foregroundStyle(detailColor).lineLimit(1) }
+            if experimental { ExperimentalTag() }
         }
         .padding(.horizontal, 14)
         .frame(height: 30)
         .glassCapsule()
         .frame(maxWidth: 520)
+    }
+}
+
+/// "Experimental": marks Wallpaper Engine scenes, which are drawn by AerialSwap's own renderer and may not look like
+/// they do in Wallpaper Engine.
+struct ExperimentalTag: View {
+    var body: some View {
+        Text("Experimental")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundStyle(Theme.ink)
+            .padding(.horizontal, 7)
+            .frame(height: 18)
+            .background(Capsule().fill(Theme.warning))
+            .fixedSize()
+            .help("Scenes are drawn by AerialSwap's own renderer: some may look different than in Wallpaper Engine.")
     }
 }
 

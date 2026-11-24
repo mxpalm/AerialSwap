@@ -467,7 +467,7 @@ private struct WorkshopSceneTile: View {
                     if let rating = scene.rating {
                         badge(rating).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     }
-                    badge("SCENE").frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    ExperimentalTag().padding(5).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                 }
                 .aspectRatio(16 / 9, contentMode: .fit)
                 .overlay {

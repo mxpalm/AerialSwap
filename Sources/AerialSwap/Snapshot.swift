@@ -69,10 +69,12 @@ enum Snapshot {
             ("04c2b-discover-filters", { m in
                 m.discoverOptions.hiddenGenres = ["Anime", "Game"]
                 m.discoverOptions.resolution = .uhd
+                m.discoverOptions.workshopKind = .scene
             }),
             ("04c3-discover-downloading", { m in
                 m.discoverOptions.hiddenGenres = []
                 m.discoverOptions.resolution = .any
+                m.discoverOptions.workshopKind = .video
                 m.discoverSource = .pixabay
                 let video = m.discoverVideos[2]
                 m.backgroundDownload = BackgroundDownload(key: "discover-\(video.id)", title: video.title, source: "Pixabay",

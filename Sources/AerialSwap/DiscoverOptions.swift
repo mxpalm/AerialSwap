@@ -197,6 +197,12 @@ struct DiscoverControls: View {
                 DiscoverFiltersButton(model: model)
             }
             .disabled(model.isBusy || !enabled)
+            .overlay(alignment: .topLeading) {
+                // On the Scenes segment's corner, so it takes no room in the row.
+                if model.discoverSource == .workshop && model.discoverOptions.workshopKind == .scene {
+                    ExperimentalTag().offset(x: 96, y: -10).allowsHitTesting(false)
+                }
+            }
             TopicStrip(topics: topics, selectedID: selectedID, isSnapshot: model.isSnapshot, select: select)
                 .disabled(model.isBusy || !enabled)
             ActiveFilterChips(model: model)

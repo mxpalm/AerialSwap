@@ -22,7 +22,7 @@ struct SceneConfigureView: View {
             .padding(.bottom, 18)
         }
         .screenToolbar(snapshot: model.isSnapshot) {
-            TitleCapsule(title: model.displayName ?? "", detail: "Scene · live preview")
+            TitleCapsule(title: model.displayName ?? "", detail: "Scene · live preview", experimental: true)
         } trailing: {
             Button("Cancel") { model.clearSource() }
                 .buttonStyle(PillButtonStyle(kind: .secondary, height: 32))
